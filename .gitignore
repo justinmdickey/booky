@@ -1,0 +1,14 @@
+# Build artifacts
+/booky
+/booky-*
+*.exe
+
+# Runtime data (SQLite DBs, uploads)
+/data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Editor / OS
+.DS_Store
+*.swp

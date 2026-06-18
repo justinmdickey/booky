@@ -1,0 +1,28 @@
+# Booky — drop-in alongside your existing Calibre-Web-Automated stack.
+#
+# Point BOOKY_CALIBRE_LIBRARY at the SAME library volume CWA uses (the dir that
+# contains metadata.db), mounted read-only. Booky never writes to it.
+services:
+  booky:
+    build: ..
+    # image: ghcr.io/justindickey/booky:latest   # once you publish one
+    container_name: booky
+    restart: unless-stopped
+    ports:
+      - "8222:8222"
+    environment:
+      BOOKY_PUBLIC_URL: "http://your-server-ip:8222"  # used in OPDS links
+      BOOKY_CALIBRE_LIBRARY: "/calibre-library"
+      # Gate the OPDS feed + stats upload with Basic auth (KOReader supports it):
+      BOOKY_AUTH_USER: "reader"
+      BOOKY_AUTH_PASS: "change-me"
+      # Set to false once you've created your kosync account, to lock registration:
+      BOOKY_ALLOW_REGISTRATION: "true"
+      TZ: "America/New_York"
+    volumes:
+      - booky-data:/data
+      # READ-ONLY mount of your Calibre library (same path CWA serves):
+      - /path/to/calibre-library:/calibre-library:ro
+
+volumes:
+  booky-data:

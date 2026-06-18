@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booky · Reading Stats</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">📚 <span>Booky</span></div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="dash">Dashboard</button>
+    {{if .HasLibrary}}<button class="tab" data-tab="curate">Curate</button>{{end}}
+    <button class="tab" data-tab="books">Books</button>
+  </nav>
+  <div class="spacer"></div>
+  <button id="theme-toggle" class="ghost" title="Toggle theme">◐</button>
+</header>
+
+<main>
+  <!-- DASHBOARD -->
+  <section id="tab-dash" class="tabpane active">
+    <div id="empty" class="empty hidden">
+      <h2>No reading data yet</h2>
+      <p>Upload your KOReader <code>statistics.sqlite3</code> to light this up — install the Booky
+         plugin on your Kobo, or push it manually:</p>
+      <pre>curl -u user:pass -F file=@statistics.sqlite3 \
+  http://this-host/api/stats/upload</pre>
+    </div>
+
+    <div id="dash-content" class="hidden">
+      <div class="stat-grid">
+        <div class="card stat"><div class="big" id="s-time">–</div><div class="lbl">total read</div></div>
+        <div class="card stat"><div class="big" id="s-streak">–</div><div class="lbl">day streak 🔥</div></div>
+        <div class="card stat"><div class="big" id="s-books">–</div><div class="lbl">books · finished</div></div>
+        <div class="card stat"><div class="big" id="s-pages">–</div><div class="lbl">pages read</div></div>
+        <div class="card stat"><div class="big" id="s-speed">–</div><div class="lbl">pages / hour</div></div>
+        <div class="card stat"><div class="big" id="s-week">–</div><div class="lbl">this week</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Reading activity</h3>
+          <div class="seg" id="range-seg">
+            <button data-days="30" class="active">30d</button>
+            <button data-days="90">90d</button>
+            <button data-days="365">1y</button>
+          </div>
+        </div>
+        <canvas id="chart-daily" height="180"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Year in reading</h3><span class="muted" id="heat-total"></span></div>
+        <div id="heatmap" class="heatmap"></div>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <h3>When you read</h3>
+          <canvas id="chart-hourly" height="140"></canvas>
+        </div>
+        <div class="card">
+          <h3>By weekday</h3>
+          <canvas id="chart-weekday" height="140"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Currently reading & recent</h3>
+        <div id="book-list" class="book-list"></div>
+      </div>
+
+      <div class="card">
+        <h3>Recent sessions</h3>
+        <div id="session-list" class="session-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CURATE -->
+  {{if .HasLibrary}}
+  <section id="tab-curate" class="tabpane">
+    <div class="card">
+      <div class="card-head">
+        <h3>Collections (your OPDS "On Deck")</h3>
+        <button id="new-collection" class="primary">+ New collection</button>
+      </div>
+      <p class="muted">Browse these on your Kobo: <strong>KOReader → OPDS → add</strong>
+        <code id="opds-url"></code></p>
+      <div id="collection-list" class="collection-list"></div>
+    </div>
+  </section>
+  {{end}}
+
+  <!-- BOOKS -->
+  <section id="tab-books" class="tabpane">
+    <div class="card">
+      <div class="card-head">
+        <h3>Library</h3>
+        <input id="book-search" type="search" placeholder="Search title / author…">
+      </div>
+      <div id="library-grid" class="library-grid"></div>
+    </div>
+  </section>
+</main>
+
+<div id="picker" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><h3 id="picker-title">Add to collection</h3><button id="picker-close" class="ghost">✕</button></div>
+    <input id="picker-search" type="search" placeholder="Search library…">
+    <div id="picker-grid" class="library-grid compact"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
