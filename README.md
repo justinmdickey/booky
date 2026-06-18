@@ -56,8 +56,8 @@ docker compose up -d           # pulls the published image; no source checkout n
 # open http://your-server-ip:8222
 ```
 
-A multi-arch image (amd64 + arm64) is published to
-`ghcr.io/justinmdickey/booky` by CI on every push to `main` and on `v*` tags.
+An amd64 image is published to `ghcr.io/justinmdickey/booky` by CI on every
+push to `main` and on `v*` tags.
 
 > Mount the Calibre library **read-only**. Booky only ever reads `metadata.db`,
 > covers, and book files — it never writes to your library.
