@@ -37,7 +37,7 @@ those three systems share an ID.
 # docker-compose.yml — see deploy/docker-compose.yml for the full version
 services:
   booky:
-    build: .
+    image: ghcr.io/justinmdickey/booky:latest   # or `build: .` to build from source
     ports: ["8222:8222"]
     environment:
       BOOKY_PUBLIC_URL: "http://your-server-ip:8222"
@@ -52,9 +52,12 @@ volumes:
 ```
 
 ```sh
-docker compose up -d --build
+docker compose up -d           # pulls the published image; no source checkout needed
 # open http://your-server-ip:8222
 ```
+
+A multi-arch image (amd64 + arm64) is published to
+`ghcr.io/justinmdickey/booky` by CI on every push to `main` and on `v*` tags.
 
 > Mount the Calibre library **read-only**. Booky only ever reads `metadata.db`,
 > covers, and book files — it never writes to your library.
@@ -83,6 +86,10 @@ BOOKY_CALIBRE_LIBRARY=/path/to/calibre-library ./booky
 KOReader → top menu → **Tools (⚙) → Progress sync → Custom sync server**:
 
 - **Custom sync server**: `http://your-server-ip:8222`
+  — note the URL is the **bare root**, with *no* `/koreader` (or any other) path
+  suffix. Many KOReader sync guides assume a suffix; Booky serves the kosync
+  endpoints (`/users/create`, `/syncs/progress`, …) directly at the root, so
+  don't append anything.
 - **Register / Login**: pick a username + password (registration is on by default;
   turn it off afterward with `BOOKY_ALLOW_REGISTRATION=false`).
 

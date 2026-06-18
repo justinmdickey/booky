@@ -160,7 +160,6 @@ function Booky:upload(verbose)
 end
 
 function Booky:doUpload(verbose)
-    local socket = require("socket")
     local http = require("socket.http")
     local ltn12 = require("ltn12")
     local mime = require("mime")
@@ -180,34 +179,64 @@ function Booky:doUpload(verbose)
         headers["Authorization"] = "Basic " .. auth
     end
 
+    -- http.request (table form) returns: 1, status_code, headers, status_line
+    -- (or nil, error_string on a transport/connection failure).
     local respbody = {}
-    local ok, code = socket.skip(1, http.request{
+    local result, code = http.request{
         url = url,
         method = "POST",
         headers = headers,
         source = ltn12.source.string(data),
         sink = ltn12.sink.table(respbody),
-    })
+    }
+    -- On a connection-level failure result is nil and `code` holds an error
+    -- string; on an HTTP response result is 1 and `code` is the numeric status.
+    local status = tonumber(code)
 
-    if ok and code == 200 then
+    if result and status == 200 then
         self.last_upload = os.time()
         self.settings:saveSetting("last_upload", self.last_upload)
         self.settings:flush()
-        logger.info("Booky: stats uploaded OK")
+        local summary = self:summarizeResponse(respbody)
+        logger.info("Booky: stats uploaded OK", summary)
         if verbose then
             UIManager:show(InfoMessage:new{
-                text = T(_("Reading stats uploaded to Booky.\n%1"), table.concat(respbody)),
+                text = T(_("Reading stats uploaded to Booky.\n%1"), summary),
                 timeout = 3,
             })
         end
     else
-        logger.warn("Booky: upload failed", code)
+        local msg
+        if not result then
+            -- Transport error: no HTTP response (DNS, refused, timeout, TLS…).
+            msg = T(_("Booky upload failed: %1\n\nCheck the server URL and that you're on the same network."),
+                tostring(code))
+        elseif status == 401 then
+            msg = _("Booky upload failed: 401 Unauthorized.\n\nCheck the username and password.")
+        elseif status then
+            msg = T(_("Booky upload failed: HTTP %1.\n%2"), status, self:summarizeResponse(respbody))
+        else
+            msg = T(_("Booky upload failed: %1"), tostring(code))
+        end
+        logger.warn("Booky: upload failed", code, status)
         if verbose then
-            UIManager:show(InfoMessage:new{
-                text = T(_("Booky upload failed (%1)."), tostring(code)),
-            })
+            UIManager:show(InfoMessage:new{ text = msg })
         end
     end
+end
+
+-- summarizeResponse renders a short, human-readable line from the server's JSON
+-- response body (it reports books/page_stats counts on success).
+function Booky:summarizeResponse(respbody)
+    local body = table.concat(respbody or {})
+    if body == "" then return _("Done.") end
+    local books = body:match('"books"%s*:%s*(%d+)')
+    local pages = body:match('"page_stats"%s*:%s*(%d+)')
+    if books and pages then
+        return T(_("%1 books, %2 page stats synced."), books, pages)
+    end
+    -- Fall back to the raw body, trimmed, so we never print a Lua table address.
+    return (body:gsub("%s+", " ")):sub(1, 200)
 end
 
 return Booky

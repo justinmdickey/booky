@@ -4,8 +4,10 @@
 # contains metadata.db), mounted read-only. Booky never writes to it.
 services:
   booky:
-    build: ..
-    # image: ghcr.io/justindickey/booky:latest   # once you publish one
+    # Pull the published image (recommended — no source build / git auth needed):
+    image: ghcr.io/justinmdickey/booky:latest
+    # …or build from source instead by removing the line above and uncommenting:
+    # build: ..
     container_name: booky
     restart: unless-stopped
     ports:

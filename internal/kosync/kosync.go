@@ -56,7 +56,10 @@ func (s *Server) auth(r *http.Request) (string, bool) {
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.allowRegistration {
-		errJSON(w, http.StatusPaymentRequired, 2005, "User registration is disabled.")
+		// 403 is more conventional than the reference server's 402 here; the
+		// KOReader client only branches on the 201 success code, so the exact
+		// error status is safe to make sensible.
+		errJSON(w, http.StatusForbidden, 2005, "User registration is disabled.")
 		return
 	}
 	var req struct {
