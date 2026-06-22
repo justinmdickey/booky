@@ -216,6 +216,21 @@ func (l *Library) CalibreIDForMD5(md5hex string) (int64, bool) {
 	return id, ok
 }
 
+// MD5ForBook computes the KOReader partial-MD5 of a book's best-format file —
+// the same content fingerprint used everywhere else, so clients can dedupe by
+// content regardless of filename. Returns "" if no file is available.
+func (l *Library) MD5ForBook(b Book) string {
+	f, ok := BestFormat(b)
+	if !ok {
+		return ""
+	}
+	path := filepath.Join(l.root, b.Path, f.Name+"."+strings.ToLower(f.Format))
+	if h, err := koreader.PartialMD5File(path); err == nil {
+		return h
+	}
+	return ""
+}
+
 func (l *Library) buildMD5Index() {
 	books, err := l.All()
 	if err != nil {

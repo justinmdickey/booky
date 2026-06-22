@@ -191,6 +191,7 @@ type manifestEntry struct {
 	Filename string `json:"filename"` // stable name the device saves/matches on
 	URL      string `json:"url"`      // download URL (relative to server root)
 	Size     int64  `json:"size"`
+	MD5      string `json:"md5"` // KOReader partial-MD5 — for content-based dedup
 }
 
 func (s *Server) apiSyncManifest(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +219,7 @@ func (s *Server) apiSyncManifest(w http.ResponseWriter, r *http.Request) {
 			Filename: syncFilename(b.Title, b.Authors, fmtl),
 			URL:      fmt.Sprintf("/opds/download/%d/%s", b.ID, fmtl),
 			Size:     f.Size,
+			MD5:      s.lib.MD5ForBook(b),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(out), "books": out})

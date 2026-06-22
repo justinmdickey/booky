@@ -366,6 +366,63 @@ function Booky:fetchManifest()
     return parsed.books
 end
 
+-- partialMD5 reproduces KOReader's util.partialMD5: twelve 1 KiB samples at
+-- offsets 1024 * 4^i for i = -1..10. This is the same content fingerprint the
+-- Booky server reports in the manifest, so we can dedupe by content regardless
+-- of filename or folder layout.
+function Booky:partialMD5(path)
+    local md5 = require("ffi/sha2").md5
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local step, size = 1024, 1024
+    local update = md5()
+    for i = -1, 10 do
+        local shift = 2 * i
+        local offset = (shift >= 0) and (step * (2 ^ shift)) or (step / (2 ^ (-shift)))
+        f:seek("set", math.floor(offset))
+        local sample = f:read(size)
+        if not sample then break end
+        update(sample)
+    end
+    f:close()
+    return update()
+end
+
+-- scanLocalHashes walks the download folder (recursively) and returns a set of
+-- partial-MD5 hashes for every .epub/.kepub/.pdf/.mobi/.azw3/.cbz it finds, so
+-- books already on the device — under any name or subfolder — are recognised.
+function Booky:scanLocalHashes(Trapper)
+    local hashes = {}
+    local exts = { epub=true, kepub=true, pdf=true, mobi=true, azw3=true, cbz=true, fb2=true }
+    local stack = { self.download_dir }
+    local n = 0
+    while #stack > 0 do
+        local dir = table.remove(stack)
+        for entry in lfs.dir(dir) do
+            if entry ~= "." and entry ~= ".." then
+                local p = dir .. "/" .. entry
+                local mode = lfs.attributes(p, "mode")
+                if mode == "directory" then
+                    table.insert(stack, p)
+                elseif mode == "file" then
+                    local ext = entry:match("%.([^.]+)$")
+                    if ext and exts[ext:lower()] then
+                        local h = self:partialMD5(p)
+                        if h then
+                            hashes[h] = true
+                            n = n + 1
+                            if Trapper and n % 10 == 0 then
+                                Trapper:info(T(_("Booky: scanning existing books… (%1)"), n))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return hashes
+end
+
 function Booky:doSyncBooks(verbose)
     local Trapper = require("ui/trapper")
 
@@ -382,11 +439,17 @@ function Booky:doSyncBooks(verbose)
         lfs.mkdir(self.download_dir)
     end
 
+    -- Build a content-hash set of everything already in the download folder so
+    -- we skip books you already have, no matter their filename or subfolder.
+    local local_hashes = self:scanLocalHashes(Trapper)
+
     local total = #books
     local downloaded, skipped, failed = 0, 0, 0
     for i, b in ipairs(books) do
         local dest = self.download_dir .. "/" .. b.filename
-        if lfs.attributes(dest, "mode") == "file" then
+        local have = (b.md5 and b.md5 ~= "" and local_hashes[b.md5])
+            or lfs.attributes(dest, "mode") == "file"
+        if have then
             skipped = skipped + 1
         else
             local keep_going = Trapper:info(T(_("Booky: downloading %1/%2\n%3"),
@@ -396,6 +459,7 @@ function Booky:doSyncBooks(verbose)
             end
             if self:downloadBook(b, dest) then
                 downloaded = downloaded + 1
+                if b.md5 and b.md5 ~= "" then local_hashes[b.md5] = true end
             else
                 failed = failed + 1
             end
