@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # create releases / upload assets on tags
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -49,3 +49,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # On a version tag, package the KOReader plugin and publish a Release so
+      # the server image and its matching plugin always ship together.
+      - name: Package KOReader plugin
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: zip -r booky.koplugin.zip plugin/booky.koplugin
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: booky.koplugin.zip
+          generate_release_notes: true
+          body: |
+            Container image: `ghcr.io/${{ github.repository }}:${{ github.ref_name }}`
+
+            **KOReader plugin:** download `booky.koplugin.zip` below, unzip into
+            `.adds/koreader/plugins/` on the Kobo (so you get
+            `.adds/koreader/plugins/booky.koplugin/`), then restart KOReader.
+            Keep the plugin and the server image on the same version.
