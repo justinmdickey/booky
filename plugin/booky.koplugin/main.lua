@@ -39,8 +39,24 @@ function Booky:init()
     self.password = self.settings:readSetting("password") or ""
     self.auto_upload = self.settings:nilOrTrue("auto_upload")
     self.last_upload = self.settings:readSetting("last_upload") or 0
+    self.download_dir = self.settings:readSetting("download_dir") or self:defaultDownloadDir()
+    self.auto_sync_books = self.settings:isTrue("auto_sync_books")
+    self.last_book_sync = self.settings:readSetting("last_book_sync") or 0
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+end
+
+-- defaultDownloadDir picks a sensible place to drop synced books: KOReader's
+-- configured home/last directory, falling back to the Kobo's onboard root.
+function Booky:defaultDownloadDir()
+    local home = G_reader_settings and G_reader_settings:readSetting("home_dir")
+    if home and lfs.attributes(home, "mode") == "directory" then
+        return home .. "/Booky"
+    end
+    if lfs.attributes("/mnt/onboard", "mode") == "directory" then
+        return "/mnt/onboard/Booky"
+    end
+    return DataStorage:getDataDir() .. "/Booky"
 end
 
 function Booky:onDispatcherRegisterActions()
@@ -48,6 +64,12 @@ function Booky:onDispatcherRegisterActions()
         category = "none",
         event = "BookyUploadStats",
         title = _("Booky: upload reading stats"),
+        general = true,
+    })
+    Dispatcher:registerAction("booky_sync_books", {
+        category = "none",
+        event = "BookySyncBooks",
+        title = _("Booky: sync all books"),
         general = true,
     })
 end
@@ -58,8 +80,33 @@ function Booky:addToMainMenu(menu_items)
         sorting_hint = "tools",
         sub_item_table = {
             {
+                text = _("Sync all books now"),
+                keep_menu_open = true,
+                callback = function() self:syncBooks(true) end,
+            },
+            {
+                text = _("Auto-sync books on WiFi connect"),
+                checked_func = function() return self.auto_sync_books end,
+                callback = function()
+                    self.auto_sync_books = not self.auto_sync_books
+                    self.settings:saveSetting("auto_sync_books", self.auto_sync_books)
+                    self.settings:flush()
+                end,
+            },
+            {
+                text_func = function()
+                    return T(_("Download folder: %1"), self.download_dir)
+                end,
+                keep_menu_open = true,
+                callback = function()
+                    self:editSetting("download_dir", _("Book download folder"),
+                        self:defaultDownloadDir())
+                end,
+            },
+            {
                 text = _("Upload stats now"),
                 keep_menu_open = true,
+                separator = true,
                 callback = function() self:upload(true) end,
             },
             {
@@ -89,8 +136,15 @@ function Booky:addToMainMenu(menu_items)
             },
             {
                 text_func = function()
-                    if self.last_upload == 0 then return _("Last upload: never") end
-                    return T(_("Last upload: %1"), os.date("%Y-%m-%d %H:%M", self.last_upload))
+                    if self.last_upload == 0 then return _("Last stats upload: never") end
+                    return T(_("Last stats upload: %1"), os.date("%Y-%m-%d %H:%M", self.last_upload))
+                end,
+                enabled = false,
+            },
+            {
+                text_func = function()
+                    if self.last_book_sync == 0 then return _("Last book sync: never") end
+                    return T(_("Last book sync: %1"), os.date("%Y-%m-%d %H:%M", self.last_book_sync))
                 end,
                 enabled = false,
             },
@@ -119,10 +173,24 @@ function Booky:editSetting(key, title, hint)
     dialog:onShowKeyboard()
 end
 
--- Public dispatcher event.
+-- Public dispatcher events (bindable to gestures).
 function Booky:onBookyUploadStats()
     self:upload(true)
     return true
+end
+
+function Booky:onBookySyncBooks()
+    self:syncBooks(true)
+    return true
+end
+
+-- Auto-sync books when WiFi comes up (throttled), if enabled.
+function Booky:onNetworkConnected()
+    if not self.auto_sync_books then return end
+    if self.server_url == "" then return end
+    local now = os.time()
+    if now - self.last_book_sync < MIN_INTERVAL then return end
+    self:syncBooks(false)
 end
 
 -- Auto-upload hooks. Reading position itself syncs via the stock kosync plugin;
@@ -237,6 +305,147 @@ function Booky:summarizeResponse(respbody)
     end
     -- Fall back to the raw body, trimmed, so we never print a Lua table address.
     return (body:gsub("%s+", " ")):sub(1, 200)
+end
+
+--[[ ---------------------------------------------------------------------------
+Book sync: pull the full library manifest from Booky and download any books not
+already present in the download folder. Incremental — books already on the
+device (matched by filename) are skipped.
+----------------------------------------------------------------------------]]
+
+function Booky:syncBooks(verbose)
+    if self.server_url == "" then
+        if verbose then
+            UIManager:show(InfoMessage:new{ text = _("Set your Booky server URL first.") })
+        end
+        return
+    end
+    NetworkMgr:runWhenOnline(function()
+        -- Run inside a Trapper coroutine so we can show live progress and let
+        -- the user dismiss it; downloads are blocking socket calls.
+        local Trapper = require("ui/trapper")
+        Trapper:wrap(function() self:doSyncBooks(verbose) end)
+    end)
+end
+
+function Booky:authHeaders(extra)
+    local mime = require("mime")
+    local headers = extra or {}
+    if self.username ~= "" then
+        headers["Authorization"] = "Basic " .. mime.b64(self.username .. ":" .. self.password)
+    end
+    return headers
+end
+
+function Booky:fetchManifest()
+    local http = require("socket.http")
+    local ltn12 = require("ltn12")
+    local body = {}
+    local url = self.server_url:gsub("/+$", "") .. "/api/sync/manifest"
+    local result, code = http.request{
+        url = url,
+        method = "GET",
+        headers = self:authHeaders(),
+        sink = ltn12.sink.table(body),
+    }
+    local status = tonumber(code)
+    if not result then
+        return nil, T(_("Couldn't reach Booky: %1"), tostring(code))
+    end
+    if status == 401 then
+        return nil, _("401 Unauthorized — check the username and password.")
+    end
+    if status ~= 200 then
+        return nil, T(_("Manifest request failed: HTTP %1."), status)
+    end
+    local JSON = require("json")
+    local ok, parsed = pcall(JSON.decode, table.concat(body))
+    if not ok or type(parsed) ~= "table" or type(parsed.books) ~= "table" then
+        return nil, _("Couldn't read the library manifest from Booky.")
+    end
+    return parsed.books
+end
+
+function Booky:doSyncBooks(verbose)
+    local Trapper = require("ui/trapper")
+
+    Trapper:info(_("Booky: fetching library…"))
+    local books, err = self:fetchManifest()
+    if not books then
+        Trapper:clear()
+        UIManager:show(InfoMessage:new{ text = T(_("Book sync failed.\n%1"), err) })
+        return
+    end
+
+    -- Ensure download folder exists.
+    if lfs.attributes(self.download_dir, "mode") ~= "directory" then
+        lfs.mkdir(self.download_dir)
+    end
+
+    local total = #books
+    local downloaded, skipped, failed = 0, 0, 0
+    for i, b in ipairs(books) do
+        local dest = self.download_dir .. "/" .. b.filename
+        if lfs.attributes(dest, "mode") == "file" then
+            skipped = skipped + 1
+        else
+            local keep_going = Trapper:info(T(_("Booky: downloading %1/%2\n%3"),
+                i, total, b.title or b.filename))
+            if not keep_going then -- user dismissed; stop cleanly
+                break
+            end
+            if self:downloadBook(b, dest) then
+                downloaded = downloaded + 1
+            else
+                failed = failed + 1
+            end
+        end
+    end
+
+    self.last_book_sync = os.time()
+    self.settings:saveSetting("last_book_sync", self.last_book_sync)
+    self.settings:flush()
+
+    Trapper:clear()
+    logger.info("Booky: book sync done", downloaded, skipped, failed)
+    if verbose or downloaded > 0 or failed > 0 then
+        local msg = T(_("Book sync complete.\n%1 new, %2 already had, %3 failed."),
+            downloaded, skipped, failed)
+        if downloaded > 0 then
+            msg = msg .. "\n" .. T(_("Saved to: %1"), self.download_dir)
+        end
+        UIManager:show(InfoMessage:new{ text = msg, timeout = downloaded > 0 and nil or 3 })
+    end
+    -- Refresh the file browser if it's showing the download folder.
+    if self.ui and self.ui.file_chooser then
+        self.ui.file_chooser:refreshPath()
+    end
+end
+
+-- downloadBook streams one book to a temp file then renames into place, so an
+-- interrupted download never leaves a half-written file that looks "present".
+function Booky:downloadBook(b, dest)
+    local http = require("socket.http")
+    local ltn12 = require("ltn12")
+    local url = self.server_url:gsub("/+$", "") .. b.url
+    local tmp = dest .. ".part"
+    local out = io.open(tmp, "wb")
+    if not out then return false end
+
+    local result, code = http.request{
+        url = url,
+        method = "GET",
+        headers = self:authHeaders(),
+        sink = ltn12.sink.file(out), -- closes the file when done
+    }
+    local status = tonumber(code)
+    if result and status == 200 then
+        os.rename(tmp, dest)
+        return true
+    end
+    os.remove(tmp)
+    logger.warn("Booky: download failed", b.filename, code, status)
+    return false
 end
 
 return Booky

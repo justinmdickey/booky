@@ -5,12 +5,14 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/justindickey/booky/internal/library"
@@ -54,6 +56,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/collections/{id}/books/{bid}", s.basicAuth(s.apiAddToCollection))
 	mux.HandleFunc("DELETE /api/collections/{id}/books/{bid}", s.basicAuth(s.apiRemoveFromCollection))
 	mux.HandleFunc("GET /api/library", s.basicAuth(s.apiLibrary))
+
+	// Sync manifest: the companion plugin pulls this to bulk-download the whole
+	// library to the Kobo, skipping what it already has.
+	mux.HandleFunc("GET /api/sync/manifest", s.basicAuth(s.apiSyncManifest))
 
 	// Stats upload: the KOReader companion plugin (or curl/USB script) POSTs
 	// the raw statistics.sqlite3 here.
@@ -174,6 +180,77 @@ func (s *Server) apiLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, books)
+}
+
+// manifestEntry is one downloadable book in the bulk-sync manifest.
+type manifestEntry struct {
+	ID       int64  `json:"id"`
+	Title    string `json:"title"`
+	Authors  string `json:"authors"`
+	Format   string `json:"format"`   // lowercase, e.g. "epub"
+	Filename string `json:"filename"` // stable name the device saves/matches on
+	URL      string `json:"url"`      // download URL (relative to server root)
+	Size     int64  `json:"size"`
+}
+
+func (s *Server) apiSyncManifest(w http.ResponseWriter, r *http.Request) {
+	if s.lib == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"books": []manifestEntry{}})
+		return
+	}
+	books, err := s.lib.All()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]manifestEntry, 0, len(books))
+	for _, b := range books {
+		f, ok := library.BestFormat(b)
+		if !ok {
+			continue // no downloadable format
+		}
+		fmtl := strings.ToLower(f.Format)
+		out = append(out, manifestEntry{
+			ID:       b.ID,
+			Title:    b.Title,
+			Authors:  b.Authors,
+			Format:   fmtl,
+			Filename: syncFilename(b.Title, b.Authors, fmtl),
+			URL:      fmt.Sprintf("/opds/download/%d/%s", b.ID, fmtl),
+			Size:     f.Size,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(out), "books": out})
+}
+
+// syncFilename builds the stable on-device filename the plugin matches against
+// to decide whether a book is already downloaded. Must stay in lockstep with
+// the plugin's expectation.
+func syncFilename(title, authors, format string) string {
+	name := strings.TrimSpace(title)
+	if authors != "" {
+		name += " - " + authors
+	}
+	if name == "" {
+		name = "book"
+	}
+	return safeFilename(name) + "." + format
+}
+
+// safeFilename strips path-hostile characters so the name is portable to FAT
+// (the Kobo's filesystem).
+func safeFilename(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\:*?"<>|`, r) || r < 0x20 {
+			return '_'
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if len(s) > 180 {
+		s = s[:180]
+	}
+	return s
 }
 
 func (s *Server) apiUpload(w http.ResponseWriter, r *http.Request) {

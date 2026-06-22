@@ -113,7 +113,26 @@ curl -u reader:change-me -F file=@statistics.sqlite3 \
   http://your-server-ip:8222/api/stats/upload
 ```
 
-### 3. Curated OPDS feed
+### 3. Bulk book sync (the whole library → Kobo)
+The same plugin can mirror your entire Calibre library onto the device — built
+for an all-KOReader Kobo where CWA's Kobo Sync (which targets the stock Nickel
+reader) isn't an option.
+
+KOReader → **Tools (⚙) → Booky stats sync**:
+- **Set download folder** → where books land (default `…/Booky`).
+- **Sync all books now** → downloads every book in the library, skipping ones
+  you already have (matched by filename, so re-running is incremental and fast).
+  Progress shows `downloading 12/52`; you can dismiss to stop.
+- **Auto-sync books on WiFi connect** → hands-off; pulls new books whenever the
+  Kobo joins WiFi (throttled to ~every 30 min).
+
+Under the hood the plugin reads `GET /api/sync/manifest` (the full library with
+download URLs) and pulls files via Booky's `/opds/download/...`. Note this is a
+*download* of files into a folder KOReader reads — it does not push to a sleeping
+device (no e-reader supports that for KOReader); "sync" here means the device
+fetches everything it's missing on demand or on WiFi connect.
+
+### 4. Curated OPDS feed
 In the Booky web UI → **Curate** → create a collection, add books from your
 library. Then on the Kobo: KOReader → **OPDS catalog → + (add)**:
 
@@ -141,6 +160,7 @@ So Booky ties all three together without any shared database id. (Implemented in
 | --- | --- |
 | `POST /users/create`, `GET /users/auth`, `PUT /syncs/progress`, `GET /syncs/progress/{doc}` | kosync protocol (KOReader-compatible) |
 | `POST /api/stats/upload` | Upload `statistics.sqlite3` (raw body or multipart `file`) |
+| `GET /api/sync/manifest` | Full library list (download URLs + filenames) for bulk book sync |
 | `GET /api/summary` | Dashboard JSON |
 | `GET /api/library`, `GET /api/collections`, `POST/DELETE /api/collections...` | Curation |
 | `GET /opds`, `/opds/all`, `/opds/recent`, `/opds/collection/{id}`, `/opds/download/{id}/{fmt}`, `/opds/cover/{id}` | OPDS catalog |
