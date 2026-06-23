@@ -41,6 +41,7 @@ function Booky:init()
     self.last_upload = self.settings:readSetting("last_upload") or 0
     self.download_dir = self.settings:readSetting("download_dir") or self:defaultDownloadDir()
     self.auto_sync_books = self.settings:isTrue("auto_sync_books")
+    self.organize_by_author = self.settings:nilOrTrue("organize_by_author")
     self.last_book_sync = self.settings:readSetting("last_book_sync") or 0
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
@@ -57,6 +58,26 @@ function Booky:defaultDownloadDir()
         return "/mnt/onboard/Booky"
     end
     return DataStorage:getDataDir() .. "/Booky"
+end
+
+-- sanitizeComponent makes a string safe as a single FAT path segment (the Kobo
+-- filesystem), matching the server's filename sanitizing.
+function Booky:sanitizeComponent(s)
+    s = (s or ""):gsub('[/\\:%*%?"<>|]', "_"):gsub("^%s+", ""):gsub("%s+$", "")
+    if #s > 120 then s = s:sub(1, 120) end
+    if s == "" then s = "Unknown" end
+    return s
+end
+
+-- destFor computes where a manifest book is saved (path only, no side effects).
+-- With organize_by_author on, that's <download_dir>/<Author>/<filename>; off,
+-- it's flat in <download_dir>. The content-hash dedup is layout-independent, so
+-- toggling this never causes re-downloads of books already present.
+function Booky:destFor(b)
+    if self.organize_by_author and b.authors and b.authors ~= "" then
+        return self.download_dir .. "/" .. self:sanitizeComponent(b.authors) .. "/" .. b.filename
+    end
+    return self.download_dir .. "/" .. b.filename
 end
 
 function Booky:onDispatcherRegisterActions()
@@ -90,6 +111,16 @@ function Booky:addToMainMenu(menu_items)
                 callback = function()
                     self.auto_sync_books = not self.auto_sync_books
                     self.settings:saveSetting("auto_sync_books", self.auto_sync_books)
+                    self.settings:flush()
+                end,
+            },
+            {
+                text = _("Organize into author folders"),
+                checked_func = function() return self.organize_by_author end,
+                help_text = _("On: save books as <Author>/<Title>.epub. Off: all books flat in the download folder."),
+                callback = function()
+                    self.organize_by_author = not self.organize_by_author
+                    self.settings:saveSetting("organize_by_author", self.organize_by_author)
                     self.settings:flush()
                 end,
             },
@@ -455,7 +486,9 @@ function Booky:doSyncBooks(verbose)
     local missing = {}    -- books whose file is gone from the library (404)
     local errored = {}    -- other download failures, with reason
     for i, b in ipairs(books) do
-        local dest = self.download_dir .. "/" .. b.filename
+        local dest = self:destFor(b)
+        -- Content-hash match wins regardless of layout; the path check is just a
+        -- fallback for books with no md5 in the manifest.
         local have = (b.md5 and b.md5 ~= "" and local_hashes[b.md5])
             or lfs.attributes(dest, "mode") == "file"
         if have then
@@ -539,6 +572,12 @@ function Booky:downloadBook(b, dest)
     local ltn12 = require("ltn12")
     local url = self.server_url:gsub("/+$", "") .. b.url
     local tmp = dest .. ".part"
+    -- Create the parent dir (e.g. the author folder) only when we actually
+    -- download, so skipped books never leave empty folders behind.
+    local parent = dest:match("^(.*)/[^/]+$")
+    if parent and lfs.attributes(parent, "mode") ~= "directory" then
+        lfs.mkdir(parent)
+    end
     local out = io.open(tmp, "wb")
     if not out then return false, _("can't write to download folder") end
 

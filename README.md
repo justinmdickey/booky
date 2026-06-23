@@ -120,11 +120,15 @@ reader) isn't an option.
 
 KOReader → **Tools (⚙) → Booky stats sync**:
 - **Set download folder** → where books land (default `…/Booky`).
+- **Organize into author folders** (on by default) → saves books as
+  `<Author>/<Title>.epub` so the device mirrors your library; turn off to keep
+  everything flat in one folder.
 - **Sync all books now** → downloads every book in the library, skipping ones
   you already have. Dedup is by **content fingerprint** (the partial-MD5), so a
   book already on the device is recognised no matter its filename or which
   subfolder it's in — point the download folder at an existing author-foldered
-  library and it won't make flat duplicates. Progress shows `downloading 12/52`;
+  library and it won't make flat duplicates, and toggling the folder layout
+  never re-downloads books you already have. Progress shows `downloading 12/52`;
   you can dismiss to stop.
 - **Auto-sync books on WiFi connect** → hands-off; pulls new books whenever the
   Kobo joins WiFi (throttled to ~every 30 min).
