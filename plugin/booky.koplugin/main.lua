@@ -31,6 +31,7 @@ local Booky = WidgetContainer:extend{
 
 local STATS_DB = DataStorage:getSettingsDir() .. "/statistics.sqlite3"
 local MIN_INTERVAL = 60 * 30 -- throttle auto-uploads to once per 30 min
+local BOOKY_VERSION = "v0.2.4" -- keep in sync with _meta.lua
 
 function Booky:init()
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/booky.lua")
@@ -147,6 +148,11 @@ function Booky:addToMainMenu(menu_items)
                     return T(_("Last book sync: %1"), os.date("%Y-%m-%d %H:%M", self.last_book_sync))
                 end,
                 enabled = false,
+            },
+            {
+                text = T(_("Plugin version: %1"), BOOKY_VERSION),
+                enabled = false,
+                separator = true,
             },
         },
     }

@@ -4,8 +4,12 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# Version is stamped from the build arg (CI passes the git tag).
+ARG VERSION=dev
 # Pure-Go (modernc sqlite), so CGO stays off -> tiny static binary.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /booky ./cmd/booky
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X github.com/justindickey/booky/internal/version.Version=${VERSION}" \
+    -o /booky ./cmd/booky
 
 # ---- run ----
 FROM alpine:3.20

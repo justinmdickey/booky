@@ -18,6 +18,7 @@ import (
 	"github.com/justindickey/booky/internal/library"
 	"github.com/justindickey/booky/internal/stats"
 	"github.com/justindickey/booky/internal/store"
+	"github.com/justindickey/booky/internal/version"
 )
 
 //go:embed templates/*.html static/*
@@ -88,7 +89,7 @@ func (s *Server) basicAuth(h http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	data := map[string]any{"HasLibrary": s.lib != nil}
+	data := map[string]any{"HasLibrary": s.lib != nil, "Version": version.Version}
 	if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

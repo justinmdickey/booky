@@ -156,3 +156,9 @@ input[type=search] { border: 1px solid var(--line); background: var(--surface); 
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .8rem; }
 .modal-box input { margin-bottom: 1rem; }
 .modal-box .library-grid { overflow-y: auto; }
+
+.footer { text-align: center; color: var(--muted); font-size: .8rem;
+  padding: 1.5rem 1rem 2.5rem; }
+.footer .ver { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--surface-2); padding: .1rem .45rem; border-radius: 6px; color: var(--text); }
+.footer a { color: var(--muted); }
