@@ -90,7 +90,8 @@ main { max-width: 1080px; margin: 0 auto; padding: 1.2rem; }
   border-radius: 8px; cursor: pointer; font-size: .8rem; font-weight: 600; }
 .seg button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 
-canvas { width: 100%; display: block; }
+canvas { width: 100%; display: block; height: 140px; }
+#chart-daily { height: 160px; }
 
 .bar-tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface);
   border: 1px solid var(--line); border-radius: 6px; padding: .3rem .55rem; font-size: .78rem;
