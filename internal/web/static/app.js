@@ -116,6 +116,23 @@ function attachBarHover(canvas, bars, labels, values, fmt) {
   canvas.onmouseleave = () => tip.classList.remove('show');
 }
 
+function attachCellHover(el) {
+  const tip = barTip();
+  el.onmousemove = e => {
+    const c = e.target.closest('.cell');
+    if (!c || !c.dataset.day) { tip.classList.remove('show'); return; }
+    const sec = +c.dataset.sec, pages = +c.dataset.pages;
+    tip.innerHTML = `${c.dataset.day}: ${fmtDuration(sec)}, ${fmtNum(pages)} pages`;
+    tip.classList.add('show');
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let tx = e.clientX + 12, ty = e.clientY - th - 8;
+    if (tx + tw > window.innerWidth - 6) tx = e.clientX - tw - 12;
+    if (ty < 6) ty = e.clientY + 12;
+    tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+  };
+  el.onmouseleave = () => tip.classList.remove('show');
+}
+
 // ---- dashboard ----
 let rangeDays = 30;
 async function loadDash() {
@@ -146,12 +163,26 @@ function renderCharts() {
     tooltip: (i) => `${daily[i].day}: ${fmtDuration(daily[i].seconds)}, ${fmtNum(daily[i].pages)} pages`,
   });
 
-  const hourly = (SUMMARY.hourly || []).map(s => Math.round(s / 60));
-  barChart($('#chart-hourly'), [...Array(24)].map((_, i) => i), hourly, { labelEvery: 4 });
+  const hourlyRaw = SUMMARY.hourly || [];
+  const hourly = hourlyRaw.map(s => Math.round(s / 60));
+  const hourLabels = [...Array(24)].map((_, i) => i);
+  barChart($('#chart-hourly'), hourLabels, hourly, {
+    labelEvery: 4,
+    tooltip: (i) => {
+      const h = +hourLabels[i];
+      const ampm = h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`;
+      return `${ampm}: ${fmtDuration(hourlyRaw[i])}`;
+    },
+  });
 
+  const wdNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const wd = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
-  const weekday = (SUMMARY.weekday || []).map(s => Math.round(s / 60));
-  barChart($('#chart-weekday'), wd, weekday, { labelEvery: 1 });
+  const weekdayRaw = SUMMARY.weekday || [];
+  const weekday = weekdayRaw.map(s => Math.round(s / 60));
+  barChart($('#chart-weekday'), wd, weekday, {
+    labelEvery: 1,
+    tooltip: (i) => `${wdNames[i]}: ${fmtDuration(weekdayRaw[i])}`,
+  });
 }
 
 function heatLevel(sec) {
@@ -176,9 +207,12 @@ function renderHeatmap() {
     const c = document.createElement('div');
     c.className = 'cell';
     c.dataset.l = heatLevel(d.seconds);
-    c.title = `${d.day}: ${fmtDuration(d.seconds)}, ${d.pages} pages`;
+    c.dataset.day = d.day;
+    c.dataset.sec = d.seconds;
+    c.dataset.pages = d.pages;
     el.appendChild(c);
   }
+  attachCellHover(el);
   $('#heat-total').textContent = `${fmtDuration(total)} over the last year`;
 }
 function emptyCell() { const c = document.createElement('div'); c.className = 'cell'; c.style.visibility = 'hidden'; return c; }
