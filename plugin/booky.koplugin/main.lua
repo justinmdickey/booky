@@ -478,26 +478,36 @@ function Booky:doSyncBooks(verbose)
 
     Trapper:clear()
     logger.info("Booky: book sync done", downloaded, skipped, failed)
+
+    -- Write the full failure detail to the log, where length doesn't matter and
+    -- the device screen stays uncluttered.
+    if #missing > 0 then
+        logger.warn("Booky: " .. #missing .. " book(s) missing on server (file gone from library): "
+            .. table.concat(missing, "; "))
+    end
+    if #errored > 0 then
+        logger.warn("Booky: " .. #errored .. " book(s) had download errors: "
+            .. table.concat(errored, "; "))
+    end
+
     if verbose or downloaded > 0 or failed > 0 then
         local msg = T(_("Book sync complete.\n%1 new · %2 already had · %3 failed."),
             downloaded, skipped, failed)
         if downloaded > 0 then
             msg = msg .. "\n" .. T(_("Saved to: %1"), self.download_dir)
         end
-        -- Explain failures instead of just counting them. The common case is a
-        -- book that's in the Calibre catalog but whose file is gone from disk —
-        -- a library problem, not a Booky/network one.
+        -- Keep the on-device popup short (e-ink screens don't scroll); explain
+        -- the common case briefly and point at the log for the full list.
         if #missing > 0 then
-            msg = msg .. "\n\n" .. T(_("%1 not on the server (in your library but the file is missing — fix it in Calibre/CWA):"), #missing)
-            msg = msg .. "\n• " .. table.concat(self:firstN(missing, 8), "\n• ")
-            if #missing > 8 then msg = msg .. "\n" .. T(_("…and %1 more"), #missing - 8) end
+            msg = msg .. "\n\n" .. T(_("%1 missing from the server — they're in your library catalog but the file is gone. Fix in Calibre/CWA."), #missing)
         end
         if #errored > 0 then
-            msg = msg .. "\n\n" .. T(_("%1 had download errors (network/server):"), #errored)
-            msg = msg .. "\n• " .. table.concat(self:firstN(errored, 5), "\n• ")
-            if #errored > 5 then msg = msg .. "\n" .. T(_("…and %1 more"), #errored - 5) end
+            msg = msg .. "\n\n" .. T(_("%1 had network/server errors."), #errored)
         end
-        UIManager:show(InfoMessage:new{ text = msg, timeout = failed > 0 and nil or (downloaded > 0 and nil or 3) })
+        if failed > 0 then
+            msg = msg .. "\n\n" .. T(_("Full list of failures is in the log:\n%1"), self:logPath())
+        end
+        UIManager:show(InfoMessage:new{ text = msg, timeout = (failed == 0 and downloaded == 0) and 3 or nil })
     end
     -- Refresh the file browser if it's showing the download folder.
     if self.ui and self.ui.file_chooser then
@@ -505,11 +515,11 @@ function Booky:doSyncBooks(verbose)
     end
 end
 
--- firstN returns up to n elements of a list (for trimming summaries).
-function Booky:firstN(list, n)
-    local out = {}
-    for i = 1, math.min(n, #list) do out[i] = list[i] end
-    return out
+-- logPath returns where KOReader writes its log on this device, so the user
+-- can find the full failure list. On a Kobo this is
+-- .adds/koreader/crash.log on the visible USB partition.
+function Booky:logPath()
+    return DataStorage:getDataDir() .. "/crash.log"
 end
 
 -- downloadBook streams one book to a temp file then renames into place, so an
