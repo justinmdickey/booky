@@ -426,11 +426,13 @@ function Booky:partialMD5(path)
     return update()
 end
 
--- scanLocalHashes walks the download folder (recursively) and returns a set of
--- partial-MD5 hashes for every .epub/.kepub/.pdf/.mobi/.azw3/.cbz it finds, so
--- books already on the device — under any name or subfolder — are recognised.
+-- scanLocalHashes walks the download folder (recursively) and returns two
+-- tables: `hashes` (a set of partial-MD5s) so books already on the device —
+-- under any name or subfolder — are recognised, and `paths` (hash -> file path)
+-- so we can locate a file by content (used for orphan cleanup).
 function Booky:scanLocalHashes(Trapper)
     local hashes = {}
+    local paths = {}
     local exts = { epub=true, kepub=true, pdf=true, mobi=true, azw3=true, cbz=true, fb2=true }
     local stack = { self.download_dir }
     local n = 0
@@ -448,6 +450,7 @@ function Booky:scanLocalHashes(Trapper)
                         local h = self:partialMD5(p)
                         if h then
                             hashes[h] = true
+                            paths[h] = p
                             n = n + 1
                             if Trapper and n % 10 == 0 then
                                 Trapper:info(T(_("Booky: scanning existing books… (%1)"), n))
@@ -458,7 +461,7 @@ function Booky:scanLocalHashes(Trapper)
             end
         end
     end
-    return hashes
+    return hashes, paths
 end
 
 function Booky:doSyncBooks(verbose)
@@ -479,7 +482,18 @@ function Booky:doSyncBooks(verbose)
 
     -- Build a content-hash set of everything already in the download folder so
     -- we skip books you already have, no matter their filename or subfolder.
-    local local_hashes = self:scanLocalHashes(Trapper)
+    local local_hashes, local_paths = self:scanLocalHashes(Trapper)
+
+    -- Build the set of hashes the server still knows about, so after syncing we
+    -- can spot on-device books that are no longer in the library (orphans).
+    local manifest_hashes = {}
+    local manifest_has_md5 = false
+    for _, b in ipairs(books) do
+        if b.md5 and b.md5 ~= "" then
+            manifest_hashes[b.md5] = true
+            manifest_has_md5 = true
+        end
+    end
 
     local total = #books
     local downloaded, skipped = 0, 0
@@ -549,7 +563,79 @@ function Booky:doSyncBooks(verbose)
         end
         UIManager:show(InfoMessage:new{ text = msg, timeout = (failed == 0 and downloaded == 0) and 3 or nil })
     end
+
+    -- Offer to clean up orphans: local files whose content fingerprint is no
+    -- longer in the manifest (removed from the library). We only do this when
+    -- the manifest clearly carried md5s — otherwise a server/auth/library
+    -- problem (empty or hash-less manifest) would look like "everything was
+    -- deleted" and wrongly offer to wipe the whole device.
+    -- Only on a manual sync — we don't want a delete prompt popping up
+    -- unbidden every time the Kobo joins WiFi during an auto-sync.
+    if verbose and manifest_has_md5 then
+        self:offerOrphanCleanup(local_paths, manifest_hashes)
+    end
+
     -- Refresh the file browser if it's showing the download folder.
+    if self.ui and self.ui.file_chooser then
+        self.ui.file_chooser:refreshPath()
+    end
+end
+
+-- offerOrphanCleanup finds on-device books whose content fingerprint is absent
+-- from the server manifest (i.e. removed from the library) and, if any, prompts
+-- the user to delete them. Nothing is deleted without explicit confirmation;
+-- dismissing the dialog keeps the files.
+function Booky:offerOrphanCleanup(local_paths, manifest_hashes)
+    local orphans = {}
+    for h, path in pairs(local_paths) do
+        if not manifest_hashes[h] then
+            table.insert(orphans, path)
+        end
+    end
+    if #orphans == 0 then return end
+
+    -- Build a short, e-ink-friendly preview: a few basenames, then "and N more".
+    local preview = {}
+    for i = 1, math.min(5, #orphans) do
+        preview[i] = "• " .. (orphans[i]:match("([^/]+)$") or orphans[i])
+    end
+    local extra = #orphans - #preview
+    local list = table.concat(preview, "\n")
+    if extra > 0 then list = list .. "\n" .. T(_("…and %1 more"), extra) end
+
+    local ConfirmBox = require("ui/widget/confirmbox")
+    UIManager:show(ConfirmBox:new{
+        text = T(_("%1 book(s) on this device are no longer in your library:\n\n%2\n\nRemove them from the device?"),
+            #orphans, list),
+        ok_text = _("Remove"),
+        cancel_text = _("Keep"),
+        ok_callback = function() self:removeOrphans(orphans) end,
+    })
+end
+
+-- removeOrphans deletes the given files and prunes any author folders left
+-- empty, then reports the result.
+function Booky:removeOrphans(orphans)
+    local removed, failed = 0, 0
+    local dirs = {}
+    for _, path in ipairs(orphans) do
+        if os.remove(path) then
+            removed = removed + 1
+            local parent = path:match("^(.*)/[^/]+$")
+            if parent then dirs[parent] = true end
+        else
+            failed = failed + 1
+            logger.warn("Booky: failed to remove orphan", path)
+        end
+    end
+    -- Remove now-empty parent folders (best effort; lfs.rmdir fails if not empty).
+    for dir in pairs(dirs) do
+        if dir ~= self.download_dir then lfs.rmdir(dir) end
+    end
+    logger.info("Booky: orphan cleanup", removed, failed)
+    local msg = T(_("Removed %1 book(s) from the device."), removed)
+    if failed > 0 then msg = msg .. "\n" .. T(_("%1 could not be deleted."), failed) end
+    UIManager:show(InfoMessage:new{ text = msg, timeout = 3 })
     if self.ui and self.ui.file_chooser then
         self.ui.file_chooser:refreshPath()
     end

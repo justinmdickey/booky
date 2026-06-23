@@ -138,7 +138,11 @@ KOReader → **Tools (⚙) → Booky stats sync**:
   subfolder it's in — point the download folder at an existing author-foldered
   library and it won't make flat duplicates, and toggling the folder layout
   never re-downloads books you already have. Progress shows `downloading 12/52`;
-  you can dismiss to stop.
+  you can dismiss to stop. After a manual sync, if any books on the device are
+  no longer in your library (you removed them in CWA), Booky offers to remove
+  them from the device — nothing is deleted without confirmation, and the
+  prompt is skipped if the manifest didn't load, so a server hiccup never looks
+  like a mass deletion.
 - **Auto-sync books on WiFi connect** → hands-off; pulls new books whenever the
   Kobo joins WiFi (throttled to ~every 30 min).
 
