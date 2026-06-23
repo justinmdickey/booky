@@ -48,7 +48,7 @@ if (localStorage.theme) document.documentElement.dataset.theme = localStorage.th
 // ---- canvas helpers (retina) ----
 function prep(canvas) {
   const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = canvas.height;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
   canvas.width = w * dpr; canvas.style.height = h + 'px';
   canvas.height = h * dpr;
   const ctx = canvas.getContext('2d');
