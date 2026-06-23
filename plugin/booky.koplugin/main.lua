@@ -31,7 +31,6 @@ local Booky = WidgetContainer:extend{
 
 local STATS_DB = DataStorage:getSettingsDir() .. "/statistics.sqlite3"
 local MIN_INTERVAL = 60 * 30 -- throttle auto-uploads to once per 30 min
-local BOOKY_VERSION = "v0.2.4" -- keep in sync with _meta.lua
 
 function Booky:init()
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/booky.lua")
@@ -150,7 +149,9 @@ function Booky:addToMainMenu(menu_items)
                 enabled = false,
             },
             {
-                text = T(_("Plugin version: %1"), BOOKY_VERSION),
+                -- self.version is merged in from _meta.lua by KOReader's
+                -- PluginLoader, so the version lives in exactly one place.
+                text = T(_("Plugin version: %1"), self.version or "unknown"),
                 enabled = false,
                 separator = true,
             },
