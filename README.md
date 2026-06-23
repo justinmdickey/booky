@@ -1,17 +1,22 @@
 # 📚 Booky
 
 A self-hosted companion for **KOReader** (on your Kobo) + **Calibre-Web-Automated**.
-One small Go binary that does three things your current setup can't:
+One small Go binary that does four things your current setup can't:
 
 1. **Private reading-progress sync** — a drop-in replacement for KOReader's
    `kosync` server. Your reading position syncs across devices, on your own
    hardware, never touching `sync.koreader.rocks`.
-2. **A reading-stats dashboard** — ingests KOReader's `statistics.sqlite3` and
+2. **Bulk library book sync** — mirror your entire Calibre library onto the
+   Kobo over WiFi. Deduped by content fingerprint (partial-MD5), so books
+   already on the device under any name or folder aren't re-downloaded. This
+   is the KOReader equivalent of Calibre-Web-Automated's Kobo Sync — which
+   only targets the stock Nickel reader, not KOReader.
+3. **A reading-stats dashboard** — ingests KOReader's `statistics.sqlite3` and
    turns it into a beautiful dashboard: total time, streaks 🔥, a GitHub-style
    year heatmap, reading speed, when-you-read patterns, per-book progress, and
    recent sessions. Books are matched to your Calibre library (covers, authors,
    series) automatically.
-3. **A curated OPDS feed** — build collections like *On Deck* / *Want to Read*
+4. **A curated OPDS feed** — build collections like *On Deck* / *Want to Read*
    in the web UI; browse and pull them straight onto your Kobo from KOReader.
 
 Everything is joined on KOReader's **partial-MD5 book fingerprint**, so a book's
@@ -24,11 +29,12 @@ those three systems share an ID.
    Kobo │  KOReader   │   stats upload (plugin)     │    Booky     │──▶ 📊 dashboard
         │             │ ─────────────────────────▶ │              │
         │             │ ◀──────────────────────────│   (this app) │──▶ 📖 OPDS feed
-        └─────────────┘   OPDS browse/download      └──────┬───────┘
-                                                           │ reads metadata.db (ro)
-                                                    ┌──────▼───────┐
-                                                    │ Calibre lib  │ (shared with CWA)
-                                                    └──────────────┘
+        │             │   OPDS browse/download      └──────┬───────┘
+        │             │ ◀──────────────────────────┘        │ reads metadata.db (ro)
+        │             │   book sync (manifest + download)   │
+        └─────────────┘                              ┌──────▼───────┐
+                                                     │ Calibre lib  │ (shared with CWA)
+                                                     └──────────────┘
 ```
 
 ## Quick start (Docker)
