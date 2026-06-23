@@ -92,6 +92,11 @@ main { max-width: 1080px; margin: 0 auto; padding: 1.2rem; }
 
 canvas { width: 100%; display: block; }
 
+.bar-tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: .3rem .55rem; font-size: .78rem;
+  box-shadow: var(--shadow); white-space: nowrap; opacity: 0; transition: opacity .1s; }
+.bar-tip.show { opacity: 1; }
+
 .heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 1fr);
   gap: 3px; overflow-x: auto; padding-bottom: .3rem; }
 .heatmap .cell { width: 11px; height: 11px; border-radius: 2px; background: var(--heat-0); }

@@ -65,10 +65,12 @@ function barChart(canvas, labels, values, opts = {}) {
   const bw = (w - pad.l - pad.r) / n;
   const accent = css('--accent'), muted = css('--muted');
   ctx.fillStyle = muted; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+  const bars = [];
   for (let i = 0; i < n; i++) {
     const v = values[i];
     const bh = (h - pad.t - pad.b) * (v / max);
     const x = pad.l + i * bw, y = h - pad.b - bh;
+    bars.push({ x: x + bw * .15, y, w: bw * .7, h: bh, i });
     ctx.fillStyle = accent;
     const r = Math.min(3, bw * .4);
     roundRect(ctx, x + bw * .15, y, bw * .7, bh, r);
@@ -78,6 +80,7 @@ function barChart(canvas, labels, values, opts = {}) {
       ctx.fillText(labels[i], x + bw / 2, h - 5);
     }
   }
+  if (opts.tooltip) attachBarHover(canvas, bars, labels, values, opts.tooltip);
 }
 function roundRect(ctx, x, y, w, h, r) {
   if (h < r) r = h < 0 ? 0 : h;
@@ -88,6 +91,29 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, 0);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
+}
+
+function barTip() {
+  let t = $('#bar-tip');
+  if (!t) { t = document.createElement('div'); t.id = 'bar-tip'; t.className = 'bar-tip'; document.body.appendChild(t); }
+  return t;
+}
+function attachBarHover(canvas, bars, labels, values, fmt) {
+  const tip = barTip();
+  canvas.onmousemove = e => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const b = bars.find(bar => x >= bar.x && x <= bar.x + bar.w);
+    if (!b) { tip.classList.remove('show'); return; }
+    tip.innerHTML = fmt ? fmt(b.i, labels[b.i], values[b.i]) : `${labels[b.i]}: ${values[b.i]}`;
+    tip.classList.add('show');
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let tx = e.clientX + 12, ty = e.clientY - th - 8;
+    if (tx + tw > window.innerWidth - 6) tx = e.clientX - tw - 12;
+    if (ty < 6) ty = e.clientY + 12;
+    tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+  };
+  canvas.onmouseleave = () => tip.classList.remove('show');
 }
 
 // ---- dashboard ----
@@ -115,7 +141,10 @@ function renderCharts() {
   const daily = (SUMMARY.daily || []).slice(-rangeDays);
   const labels = daily.map(d => d.day.slice(5));
   const mins = daily.map(d => Math.round(d.seconds / 60));
-  barChart($('#chart-daily'), labels, mins, { labelEvery: Math.ceil(daily.length / 8) });
+  barChart($('#chart-daily'), labels, mins, {
+    labelEvery: Math.ceil(daily.length / 8),
+    tooltip: (i) => `${daily[i].day}: ${fmtDuration(daily[i].seconds)}, ${fmtNum(daily[i].pages)} pages`,
+  });
 
   const hourly = (SUMMARY.hourly || []).map(s => Math.round(s / 60));
   barChart($('#chart-hourly'), [...Array(24)].map((_, i) => i), hourly, { labelEvery: 4 });
