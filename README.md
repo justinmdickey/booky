@@ -23,18 +23,21 @@ Everything is joined on KOReader's **partial-MD5 book fingerprint**, so a book's
 sync position, its stats, and its Calibre entry all line up — even though none of
 those three systems share an ID.
 
-```
-        ┌─────────────┐   progress sync (kosync)   ┌──────────────┐
-        │             │ ─────────────────────────▶ │              │
-   Kobo │  KOReader   │   stats upload (plugin)     │    Booky     │──▶ 📊 dashboard
-        │             │ ─────────────────────────▶ │              │
-        │             │ ◀──────────────────────────│   (this app) │──▶ 📖 OPDS feed
-        │             │   OPDS browse/download      └──────┬───────┘
-        │             │ ◀──────────────────────────┘        │ reads metadata.db (ro)
-        │             │   book sync (manifest + download)   │
-        └─────────────┘                              ┌──────▼───────┐
-                                                     │ Calibre lib  │ (shared with CWA)
-                                                     └──────────────┘
+```mermaid
+flowchart LR
+  Kobo["🛧 Kobo<br/>KOReader"]
+  Booky["📚 Booky<br/>(this app)"]
+  Cal["📖 Calibre lib<br/>(shared with CWA)"]
+  Dash["📊 dashboard"]
+  Opds["📖 OPDS feed"]
+
+  Kobo -->|"progress sync (kosync)"| Booky
+  Kobo -->|"stats upload (plugin)"| Booky
+  Booky -->|"OPDS browse/download"| Kobo
+  Booky -->|"book sync (manifest + download)"| Kobo
+  Booky -.->|"reads metadata.db (ro)"| Cal
+  Booky --> Dash
+  Booky --> Opds
 ```
 
 ## Quick start (Docker)
