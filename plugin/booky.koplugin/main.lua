@@ -444,7 +444,9 @@ function Booky:doSyncBooks(verbose)
     local local_hashes = self:scanLocalHashes(Trapper)
 
     local total = #books
-    local downloaded, skipped, failed = 0, 0, 0
+    local downloaded, skipped = 0, 0
+    local missing = {}    -- books whose file is gone from the library (404)
+    local errored = {}    -- other download failures, with reason
     for i, b in ipairs(books) do
         local dest = self.download_dir .. "/" .. b.filename
         local have = (b.md5 and b.md5 ~= "" and local_hashes[b.md5])
@@ -457,14 +459,18 @@ function Booky:doSyncBooks(verbose)
             if not keep_going then -- user dismissed; stop cleanly
                 break
             end
-            if self:downloadBook(b, dest) then
+            local ok, reason = self:downloadBook(b, dest)
+            if ok then
                 downloaded = downloaded + 1
                 if b.md5 and b.md5 ~= "" then local_hashes[b.md5] = true end
+            elseif reason == "missing" then
+                table.insert(missing, b.title or b.filename)
             else
-                failed = failed + 1
+                table.insert(errored, (b.title or b.filename) .. " (" .. tostring(reason) .. ")")
             end
         end
     end
+    local failed = #missing + #errored
 
     self.last_book_sync = os.time()
     self.settings:saveSetting("last_book_sync", self.last_book_sync)
@@ -473,12 +479,25 @@ function Booky:doSyncBooks(verbose)
     Trapper:clear()
     logger.info("Booky: book sync done", downloaded, skipped, failed)
     if verbose or downloaded > 0 or failed > 0 then
-        local msg = T(_("Book sync complete.\n%1 new, %2 already had, %3 failed."),
+        local msg = T(_("Book sync complete.\n%1 new · %2 already had · %3 failed."),
             downloaded, skipped, failed)
         if downloaded > 0 then
             msg = msg .. "\n" .. T(_("Saved to: %1"), self.download_dir)
         end
-        UIManager:show(InfoMessage:new{ text = msg, timeout = downloaded > 0 and nil or 3 })
+        -- Explain failures instead of just counting them. The common case is a
+        -- book that's in the Calibre catalog but whose file is gone from disk —
+        -- a library problem, not a Booky/network one.
+        if #missing > 0 then
+            msg = msg .. "\n\n" .. T(_("%1 not on the server (in your library but the file is missing — fix it in Calibre/CWA):"), #missing)
+            msg = msg .. "\n• " .. table.concat(self:firstN(missing, 8), "\n• ")
+            if #missing > 8 then msg = msg .. "\n" .. T(_("…and %1 more"), #missing - 8) end
+        end
+        if #errored > 0 then
+            msg = msg .. "\n\n" .. T(_("%1 had download errors (network/server):"), #errored)
+            msg = msg .. "\n• " .. table.concat(self:firstN(errored, 5), "\n• ")
+            if #errored > 5 then msg = msg .. "\n" .. T(_("…and %1 more"), #errored - 5) end
+        end
+        UIManager:show(InfoMessage:new{ text = msg, timeout = failed > 0 and nil or (downloaded > 0 and nil or 3) })
     end
     -- Refresh the file browser if it's showing the download folder.
     if self.ui and self.ui.file_chooser then
@@ -486,15 +505,25 @@ function Booky:doSyncBooks(verbose)
     end
 end
 
+-- firstN returns up to n elements of a list (for trimming summaries).
+function Booky:firstN(list, n)
+    local out = {}
+    for i = 1, math.min(n, #list) do out[i] = list[i] end
+    return out
+end
+
 -- downloadBook streams one book to a temp file then renames into place, so an
 -- interrupted download never leaves a half-written file that looks "present".
+-- Returns (true) on success, or (false, reason) where reason is "missing" for a
+-- 404 (file gone from the library), an HTTP status number, or a transport error
+-- string.
 function Booky:downloadBook(b, dest)
     local http = require("socket.http")
     local ltn12 = require("ltn12")
     local url = self.server_url:gsub("/+$", "") .. b.url
     local tmp = dest .. ".part"
     local out = io.open(tmp, "wb")
-    if not out then return false end
+    if not out then return false, _("can't write to download folder") end
 
     local result, code = http.request{
         url = url,
@@ -509,7 +538,14 @@ function Booky:downloadBook(b, dest)
     end
     os.remove(tmp)
     logger.warn("Booky: download failed", b.filename, code, status)
-    return false
+    if status == 404 then
+        return false, "missing"
+    elseif status == 401 then
+        return false, _("401 unauthorized")
+    elseif status then
+        return false, T(_("HTTP %1"), status)
+    end
+    return false, tostring(code) -- transport error string
 end
 
 return Booky
