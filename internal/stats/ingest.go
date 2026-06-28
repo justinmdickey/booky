@@ -29,8 +29,10 @@ func Ingest(st *store.Store, srcPath string) (books int, pages int, err error) {
 		return 0, 0, err
 	}
 
-	// Map of source book id -> md5, built while importing books.
+	// Map of source book id -> md5, built while importing books, plus the set
+	// of md5s present in this upload (used to prune rows that are gone).
 	idToMD5 := map[int64]string{}
+	seen := map[string]bool{}
 
 	tx, err := st.DB().Begin()
 	if err != nil {
@@ -75,6 +77,7 @@ ON CONFLICT(md5) DO UPDATE SET
 			continue // can't key it; skip
 		}
 		idToMD5[id] = md5
+		seen[md5] = true
 		if _, err := upBook.Exec(md5, title, authors, series, lang, npages,
 			lastOpen, hl, notes, trt, trp); err != nil {
 			return 0, 0, err
@@ -128,10 +131,61 @@ ON CONFLICT(md5,page,start_time) DO UPDATE SET
 		return 0, 0, err
 	}
 
+	// Prune stale rows: KOReader's statistics.sqlite3 is the device's complete,
+	// authoritative reading history, so any book/page_stat in our store whose
+	// md5 is absent from this upload is stale — left over from a previous file
+	// version (re-paginated, metadata-rewritten, renamed). Without this, those
+	// orphans accumulate forever and show as duplicate book rows. Skip pruning
+	// for an empty upload so a corrupt/empty file can't wipe the dashboard.
+	if len(seen) > 0 {
+		if err := pruneMissing(tx, "page_stat", seen); err != nil {
+			return 0, 0, err
+		}
+		if err := pruneMissing(tx, "book", seen); err != nil {
+			return 0, 0, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, 0, err
 	}
 	return books, pages, nil
+}
+
+// pruneMissing deletes rows from the given table (book or page_stat) whose md5
+// is not in the keep set — i.e. books no longer present in the uploaded
+// statistics DB.
+func pruneMissing(tx *sql.Tx, table string, keep map[string]bool) error {
+	rows, err := tx.Query("SELECT DISTINCT md5 FROM " + table)
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for rows.Next() {
+		var md5 string
+		if err := rows.Scan(&md5); err != nil {
+			rows.Close()
+			return err
+		}
+		if !keep[md5] {
+			stale = append(stale, md5)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	del, err := tx.Prepare("DELETE FROM " + table + " WHERE md5 = ?")
+	if err != nil {
+		return err
+	}
+	defer del.Close()
+	for _, md5 := range stale {
+		if _, err := del.Exec(md5); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // detectPageStatData reports whether the source DB uses the modern

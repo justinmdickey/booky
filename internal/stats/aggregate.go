@@ -73,6 +73,7 @@ func Compute(st *store.Store, loc *time.Location) (Summary, error) {
 SELECT b.md5, b.title, b.authors, b.series, b.pages, b.highlights, b.last_open,
        IFNULL(SUM(p.duration),0)        AS secs,
        COUNT(DISTINCT p.page)            AS pages_read,
+       IFNULL(MAX(p.page),0)             AS max_page,
        IFNULL(MIN(p.start_time),0)       AS first_read
 FROM book b LEFT JOIN page_stat p ON p.md5 = b.md5
 GROUP BY b.md5
@@ -83,12 +84,22 @@ ORDER BY secs DESC`)
 	defer rows.Close()
 	for rows.Next() {
 		var b BookStat
+		var maxPage int64
 		if err := rows.Scan(&b.MD5, &b.Title, &b.Authors, &b.Series, &b.Pages,
-			&b.Highlights, &b.LastOpen, &b.Seconds, &b.PagesRead, &b.FirstRead); err != nil {
+			&b.Highlights, &b.LastOpen, &b.Seconds, &b.PagesRead, &maxPage, &b.FirstRead); err != nil {
 			return s, err
 		}
+		// "Read this far" is the furthest page reached, not the count of distinct
+		// pages logged. When a book is re-paginated across file versions (a
+		// metadata rewrite, a font/reflow change), the same content gets logged
+		// under different page numbers, so DISTINCT undercounts. Reaching the
+		// last page is the honest signal that the book was read through.
+		reached := maxPage
+		if b.PagesRead > reached {
+			reached = b.PagesRead
+		}
 		if b.Pages > 0 {
-			b.Percent = float64(b.PagesRead) / float64(b.Pages) * 100
+			b.Percent = float64(reached) / float64(b.Pages) * 100
 			if b.Percent > 100 {
 				b.Percent = 100
 			}
@@ -96,7 +107,7 @@ ORDER BY secs DESC`)
 		if b.Seconds > 0 {
 			b.PagesPerHour = float64(b.PagesRead) * 3600.0 / float64(b.Seconds)
 		}
-		b.Finished = b.Pages > 0 && b.PagesRead >= b.Pages-1 // allow off-by-one
+		b.Finished = b.Pages > 0 && reached >= b.Pages-1 // allow off-by-one
 		s.TotalSeconds += b.Seconds
 		s.TotalPages += b.PagesRead
 		s.BooksTracked++

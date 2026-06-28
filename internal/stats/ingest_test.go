@@ -46,6 +46,54 @@ CREATE TABLE page_stat_data (id_book INTEGER, page INTEGER, start_time INTEGER,
 	}
 }
 
+// TestIngestPrunesStaleBooks verifies that a book present in an earlier upload
+// but absent from a later one is removed — the re-pagination/metadata-rewrite
+// case where a book's md5 changes and the old row would otherwise linger.
+func TestIngestPrunesStaleBooks(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "booky.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// First upload: two books.
+	ko1 := filepath.Join(dir, "stats1.sqlite3")
+	makeKOReaderDB(t, ko1)
+	if _, _, err := Ingest(st, ko1); err != nil {
+		t.Fatalf("ingest1: %v", err)
+	}
+
+	// Second upload: only one book (md5dune), simulating md5hyp going stale.
+	ko2 := filepath.Join(dir, "stats2.sqlite3")
+	db, err := sql.Open("sqlite", "file:"+ko2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`CREATE TABLE book (id INTEGER PRIMARY KEY, title TEXT, authors TEXT, notes INTEGER,
+	  last_open INTEGER, highlights INTEGER, pages INTEGER, series TEXT, language TEXT,
+	  md5 TEXT, total_read_time INTEGER, total_read_pages INTEGER);
+	CREATE TABLE page_stat_data (id_book INTEGER, page INTEGER, start_time INTEGER,
+	  duration INTEGER, total_pages INTEGER, UNIQUE(id_book,page,start_time));`)
+	db.Exec(`INSERT INTO book VALUES (1,'Dune','Frank Herbert',0,?,0,400,'','eng','md5dune',0,0)`, time.Now().Unix())
+	db.Exec(`INSERT INTO page_stat_data VALUES (1,1,?,55,400)`, time.Now().Unix())
+	db.Close()
+
+	if _, _, err := Ingest(st, ko2); err != nil {
+		t.Fatalf("ingest2: %v", err)
+	}
+
+	var nBooks, nHypPages int
+	st.DB().QueryRow(`SELECT COUNT(*) FROM book`).Scan(&nBooks)
+	if nBooks != 1 {
+		t.Errorf("expected 1 book after prune, got %d", nBooks)
+	}
+	st.DB().QueryRow(`SELECT COUNT(*) FROM page_stat WHERE md5='md5hyp'`).Scan(&nHypPages)
+	if nHypPages != 0 {
+		t.Errorf("stale page_stat rows not pruned: %d", nHypPages)
+	}
+}
+
 func TestIngestAndCompute(t *testing.T) {
 	dir := t.TempDir()
 	koPath := filepath.Join(dir, "statistics.sqlite3")
