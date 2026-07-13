@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Booky · Reading Stats</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{.Version}}">
 </head>
 <body>
 <header class="topbar">
@@ -115,24 +115,30 @@
 {{if .AuthEnabled}}
 <div id="account-modal" class="modal hidden">
   <div class="modal-box account-box">
-    <div class="modal-head"><h3>Account</h3><button id="account-close" class="ghost">✕</button></div>
+    <div class="modal-head"><h3>👤 Account</h3><button id="account-close" class="ghost">✕</button></div>
     <form id="account-form" class="account-form">
-      <label for="acct-user">Username</label>
-      <input id="acct-user" type="text" value="{{.User}}" autocapitalize="none" autocomplete="username">
-      <label for="acct-pass">New password <span class="muted">(blank = keep current)</span></label>
-      <input id="acct-pass" type="password" autocomplete="new-password">
-      <label for="acct-current">Current password</label>
-      <input id="acct-current" type="password" required autocomplete="current-password">
-      <div id="acct-error" class="form-error hidden"></div>
+      <div class="field">
+        <label for="acct-user">Username</label>
+        <input id="acct-user" type="text" value="{{.User}}" autocapitalize="none" spellcheck="false" autocomplete="username">
+      </div>
+      <div class="field">
+        <label for="acct-pass">New password</label>
+        <input id="acct-pass" type="password" placeholder="Leave blank to keep current" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label for="acct-current">Current password</label>
+        <input id="acct-current" type="password" required autocomplete="current-password">
+      </div>
+      <div id="acct-error" class="form-error hidden" role="alert"></div>
       <div id="acct-ok" class="form-ok hidden">Saved ✓</div>
       <div class="account-actions">
         <button type="submit" class="primary">Save changes</button>
         <span class="spacer"></span>
-        <button type="button" id="logout-btn" class="ghost">Sign out</button>
+        <button type="button" id="logout-btn" class="ghost wide">Sign out</button>
       </div>
     </form>
-    <p class="muted">Same credentials gate the OPDS feed and the KOReader plugin —
-       update them on your devices after changing.</p>
+    <p class="account-note">These credentials also unlock the OPDS feed and the KOReader
+       plugin — update them on your devices after changing.</p>
   </div>
 </div>
 {{end}}
@@ -145,6 +151,6 @@
   </div>
 </div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v={{.Version}}"></script>
 </body>
 </html>

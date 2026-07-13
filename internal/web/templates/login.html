@@ -3,35 +3,46 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Booky · {{if .Setup}}Setup{{else}}Sign in{{end}}</title>
+<title>Booky · {{if .Setup}}Welcome{{else}}Sign in{{end}}</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{.Version}}">
 </head>
 <body class="login-body">
 <div class="login-wrap">
-  <form id="login-form" class="card login-card" autocomplete="on">
-    <div class="login-brand">📚 <span>Booky</span></div>
+  <div class="login-brand">
+    <div class="login-mark">📚</div>
+    <h1>Booky</h1>
+    <p class="login-tag">{{if .Setup}}Let’s set up your library{{else}}Your reading, your server{{end}}</p>
+  </div>
+
+  <form id="login-form" class="login-card" autocomplete="on">
     {{if .Setup}}
-    <h2>Create your account</h2>
-    <p class="muted">First run — pick a username and password. These also work for
-       the OPDS feed and the KOReader plugin.</p>
-    {{else}}
-    <h2>Sign in</h2>
+    <p class="login-hint">First run — create the account for the dashboard, OPDS feed,
+       and KOReader plugin.</p>
     {{end}}
-    <label for="login-user">Username</label>
-    <input id="login-user" name="username" type="text" required autofocus
-           autocapitalize="none" autocomplete="username">
-    <label for="login-pass">Password</label>
-    <input id="login-pass" name="password" type="password" required
-           autocomplete="{{if .Setup}}new-password{{else}}current-password{{end}}">
+    <div class="field">
+      <label for="login-user">Username</label>
+      <input id="login-user" name="username" type="text" required autofocus
+             autocapitalize="none" spellcheck="false" autocomplete="username" placeholder="reader">
+    </div>
+    <div class="field">
+      <label for="login-pass">Password</label>
+      <input id="login-pass" name="password" type="password" required
+             placeholder="••••••••"
+             autocomplete="{{if .Setup}}new-password{{else}}current-password{{end}}">
+    </div>
     {{if .Setup}}
-    <label for="login-pass2">Confirm password</label>
-    <input id="login-pass2" name="password2" type="password" required autocomplete="new-password">
+    <div class="field">
+      <label for="login-pass2">Confirm password</label>
+      <input id="login-pass2" name="password2" type="password" required
+             placeholder="••••••••" autocomplete="new-password">
+    </div>
     {{end}}
-    <div id="login-error" class="login-error hidden"></div>
-    <button type="submit" class="primary">{{if .Setup}}Create account{{else}}Sign in{{end}}</button>
+    <div id="login-error" class="form-error hidden" role="alert"></div>
+    <button type="submit" class="primary login-submit">{{if .Setup}}Create account{{else}}Sign in{{end}}</button>
   </form>
-  <p class="muted login-version">Booky {{.Version}}</p>
+
+  <p class="login-version">Booky {{.Version}}</p>
 </div>
 <script>
 const form = document.getElementById('login-form');
@@ -46,7 +57,9 @@ form.addEventListener('submit', async (e) => {
     const p2 = document.getElementById('login-pass2').value;
     if (password !== p2) return showErr('Passwords do not match');
   }
-  const btn = form.querySelector('button'); btn.disabled = true;
+  const btn = form.querySelector('button');
+  btn.disabled = true;
+  btn.textContent = setup ? 'Creating…' : 'Signing in…';
   try {
     const r = await fetch(setup ? '/api/setup' : '/api/login', {
       method: 'POST',
@@ -56,10 +69,15 @@ form.addEventListener('submit', async (e) => {
     if (r.ok) { location.href = '/'; return; }
     const body = await r.json().catch(() => ({}));
     showErr(body.error || 'Sign in failed');
-  } catch { showErr('Network error'); }
+  } catch { showErr('Network error — is the server up?'); }
   btn.disabled = false;
+  btn.textContent = setup ? 'Create account' : 'Sign in';
 });
-function showErr(msg) { errBox.textContent = msg; errBox.classList.remove('hidden'); }
+function showErr(msg) {
+  errBox.textContent = msg;
+  errBox.classList.remove('hidden');
+  form.classList.remove('shake'); void form.offsetWidth; form.classList.add('shake');
+}
 </script>
 </body>
 </html>
