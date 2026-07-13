@@ -104,6 +104,22 @@ CREATE TABLE IF NOT EXISTS collection_book (
 );
 
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+
+-- Dashboard/OPDS accounts (bcrypt hashes), separate from kosync users whose
+-- keys are md5 hex fixed by the KOReader sync protocol.
+CREATE TABLE IF NOT EXISTS web_user (
+    username   TEXT PRIMARY KEY,
+    pass_hash  TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+-- Browser sessions for the dashboard. Only a SHA-256 of the token is stored.
+CREATE TABLE IF NOT EXISTS web_session (
+    token_hash TEXT PRIMARY KEY,
+    username   TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS web_session_exp ON web_session(expires_at);
 `
 	_, err := s.db.Exec(schema)
 	return err
@@ -141,6 +157,79 @@ func (s *Store) CheckAuth(username, key string) bool {
 		return false
 	}
 	return stored == key
+}
+
+// ---- Web users & sessions ----
+
+// CountWebUsers reports how many dashboard accounts exist (0 = first run).
+func (s *Store) CountWebUsers() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM web_user`).Scan(&n)
+	return n, err
+}
+
+func (s *Store) CreateWebUser(username, passHash string) error {
+	_, err := s.db.Exec(`INSERT INTO web_user(username,pass_hash,created_at) VALUES(?,?,?)`,
+		username, passHash, time.Now().Unix())
+	return err
+}
+
+// WebUserHash returns the stored bcrypt hash for a username.
+func (s *Store) WebUserHash(username string) (string, bool) {
+	var h string
+	err := s.db.QueryRow(`SELECT pass_hash FROM web_user WHERE username=?`, username).Scan(&h)
+	return h, err == nil
+}
+
+// UpdateWebUser renames a user and/or replaces their password hash. Sessions
+// follow the rename so the caller stays logged in.
+func (s *Store) UpdateWebUser(oldName, newName, passHash string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE web_user SET username=?, pass_hash=? WHERE username=?`,
+		newName, passHash, oldName); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE web_session SET username=? WHERE username=?`, newName, oldName); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) CreateSession(tokenHash, username string, expiresAt int64) error {
+	_, err := s.db.Exec(`INSERT INTO web_session(token_hash,username,expires_at) VALUES(?,?,?)`,
+		tokenHash, username, expiresAt)
+	return err
+}
+
+// SessionUser resolves a token hash to a username, expiring stale rows lazily.
+func (s *Store) SessionUser(tokenHash string) (string, bool) {
+	var user string
+	var exp int64
+	err := s.db.QueryRow(`SELECT username, expires_at FROM web_session WHERE token_hash=?`, tokenHash).
+		Scan(&user, &exp)
+	if err != nil {
+		return "", false
+	}
+	if time.Now().Unix() > exp {
+		_, _ = s.db.Exec(`DELETE FROM web_session WHERE expires_at < ?`, time.Now().Unix())
+		return "", false
+	}
+	return user, true
+}
+
+func (s *Store) DeleteSession(tokenHash string) error {
+	_, err := s.db.Exec(`DELETE FROM web_session WHERE token_hash=?`, tokenHash)
+	return err
+}
+
+// DeleteUserSessions logs a user out everywhere (used after password change).
+func (s *Store) DeleteUserSessions(username string) error {
+	_, err := s.db.Exec(`DELETE FROM web_session WHERE username=?`, username)
+	return err
 }
 
 // ---- Progress ----

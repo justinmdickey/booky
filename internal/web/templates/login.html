@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booky · {{if .Setup}}Setup{{else}}Sign in{{end}}</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-body">
+<div class="login-wrap">
+  <form id="login-form" class="card login-card" autocomplete="on">
+    <div class="login-brand">📚 <span>Booky</span></div>
+    {{if .Setup}}
+    <h2>Create your account</h2>
+    <p class="muted">First run — pick a username and password. These also work for
+       the OPDS feed and the KOReader plugin.</p>
+    {{else}}
+    <h2>Sign in</h2>
+    {{end}}
+    <label for="login-user">Username</label>
+    <input id="login-user" name="username" type="text" required autofocus
+           autocapitalize="none" autocomplete="username">
+    <label for="login-pass">Password</label>
+    <input id="login-pass" name="password" type="password" required
+           autocomplete="{{if .Setup}}new-password{{else}}current-password{{end}}">
+    {{if .Setup}}
+    <label for="login-pass2">Confirm password</label>
+    <input id="login-pass2" name="password2" type="password" required autocomplete="new-password">
+    {{end}}
+    <div id="login-error" class="login-error hidden"></div>
+    <button type="submit" class="primary">{{if .Setup}}Create account{{else}}Sign in{{end}}</button>
+  </form>
+  <p class="muted login-version">Booky {{.Version}}</p>
+</div>
+<script>
+const form = document.getElementById('login-form');
+const errBox = document.getElementById('login-error');
+const setup = {{if .Setup}}true{{else}}false{{end}};
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errBox.classList.add('hidden');
+  const username = document.getElementById('login-user').value.trim();
+  const password = document.getElementById('login-pass').value;
+  if (setup) {
+    const p2 = document.getElementById('login-pass2').value;
+    if (password !== p2) return showErr('Passwords do not match');
+  }
+  const btn = form.querySelector('button'); btn.disabled = true;
+  try {
+    const r = await fetch(setup ? '/api/setup' : '/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password}),
+    });
+    if (r.ok) { location.href = '/'; return; }
+    const body = await r.json().catch(() => ({}));
+    showErr(body.error || 'Sign in failed');
+  } catch { showErr('Network error'); }
+  btn.disabled = false;
+});
+function showErr(msg) { errBox.textContent = msg; errBox.classList.remove('hidden'); }
+</script>
+</body>
+</html>

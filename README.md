@@ -85,7 +85,7 @@ BOOKY_CALIBRE_LIBRARY=/path/to/calibre-library ./booky
 | `BOOKY_ADDR` | `:8222` | Listen address |
 | `BOOKY_DATA_DIR` | `./data` (`/data` in Docker) | Booky's own SQLite DB + uploads |
 | `BOOKY_CALIBRE_LIBRARY` | *(empty)* | Calibre library dir (contains `metadata.db`). Empty disables library + OPDS |
-| `BOOKY_AUTH_USER` / `BOOKY_AUTH_PASS` | *(empty)* | HTTP Basic auth for the OPDS feed, dashboard API, and stats upload. Empty = open |
+| `BOOKY_AUTH_USER` / `BOOKY_AUTH_PASS` | *(empty)* | Seeds the first dashboard account on a fresh database, then ignored — manage credentials in the web UI (👤). If unset, the dashboard prompts you to create an account on first visit |
 | `BOOKY_ALLOW_REGISTRATION` | `true` | Allow new kosync users via `POST /users/create`. Set `false` after creating yours |
 | `BOOKY_PUBLIC_URL` | *(derived)* | External base URL used in OPDS links |
 
@@ -110,7 +110,7 @@ Copy `plugin/booky.koplugin/` to your Kobo at
 
 KOReader → **Tools (⚙) → Booky stats sync**:
 - **Set server URL** → `http://your-server-ip:8222`
-- **Set username / password** → match `BOOKY_AUTH_USER` / `BOOKY_AUTH_PASS`
+- **Set username / password** → your Booky account (created on first dashboard visit)
 - Leave **Auto-upload on close/suspend** on.
 
 Your `statistics.sqlite3` uploads over WiFi (throttled to ~every 30 min) and the
@@ -157,7 +157,7 @@ In the Booky web UI → **Curate** → create a collection, add books from your
 library. Then on the Kobo: KOReader → **OPDS catalog → + (add)**:
 
 - **URL**: `http://your-server-ip:8222/opds`
-- **Username / Password**: your `BOOKY_AUTH_*` (if set)
+- **Username / Password**: your Booky account
 
 Browse *On Deck → your collection* and download straight to the device.
 

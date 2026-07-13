@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/justindickey/booky/internal/auth"
 	"github.com/justindickey/booky/internal/config"
 	"github.com/justindickey/booky/internal/kosync"
 	"github.com/justindickey/booky/internal/library"
@@ -50,6 +51,20 @@ func main() {
 		log.Printf("calibre library: not configured (set BOOKY_CALIBRE_LIBRARY)")
 	}
 
+	// Dashboard/OPDS accounts. Seed the first account from BOOKY_AUTH_USER/PASS
+	// so existing deployments keep their credentials; after that the database
+	// is the source of truth and the env vars are ignored.
+	am := auth.New(st)
+	if n, err := st.CountWebUsers(); err == nil && n == 0 && cfg.OPDSUser != "" && cfg.OPDSPass != "" {
+		if err := am.CreateUser(cfg.OPDSUser, cfg.OPDSPass); err != nil {
+			log.Fatalf("seed account from BOOKY_AUTH_USER: %v", err)
+		}
+		log.Printf("created account %q from BOOKY_AUTH_USER (manage it in the web UI from now on)", cfg.OPDSUser)
+	}
+	if !am.Enabled() {
+		log.Printf("WARNING: no account configured — visit the dashboard to create one; until then everything is open")
+	}
+
 	mux := http.NewServeMux()
 
 	// kosync — always on; this is the headline feature.
@@ -57,11 +72,11 @@ func main() {
 
 	// OPDS — only when a library is mounted.
 	if lib != nil {
-		opds.New(lib, st, cfg.PublicURL).Register(mux)
+		opds.New(lib, st, cfg.PublicURL, am).Register(mux)
 	}
 
 	// Web dashboard + API.
-	websrv, err := web.New(st, lib, cfg.DataDir, cfg.OPDSUser, cfg.OPDSPass)
+	websrv, err := web.New(st, lib, am, cfg.DataDir)
 	if err != nil {
 		log.Fatalf("init web: %v", err)
 	}

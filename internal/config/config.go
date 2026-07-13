@@ -21,8 +21,8 @@ type Config struct {
 	// integration.
 	CalibreLibrary string
 
-	// OPDSUser/OPDSPass gate the OPDS feed and stats-upload endpoints with
-	// HTTP Basic auth. If OPDSUser is empty, those endpoints are open.
+	// OPDSUser/OPDSPass seed the first dashboard account on an empty database,
+	// then are ignored — credentials live in the DB and are managed in the UI.
 	OPDSUser string
 	OPDSPass string
 

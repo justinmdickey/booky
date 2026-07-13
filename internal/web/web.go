@@ -2,7 +2,6 @@
 package web
 
 import (
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/justindickey/booky/internal/auth"
 	"github.com/justindickey/booky/internal/library"
 	"github.com/justindickey/booky/internal/stats"
 	"github.com/justindickey/booky/internal/store"
@@ -25,22 +25,21 @@ import (
 var assets embed.FS
 
 type Server struct {
-	st       *store.Store
-	lib      *library.Library
-	dataDir  string
-	user     string
-	pass     string
-	tmpl     *template.Template
-	loc      *time.Location
+	st      *store.Store
+	lib     *library.Library
+	auth    *auth.Manager
+	dataDir string
+	tmpl    *template.Template
+	loc     *time.Location
 }
 
-func New(st *store.Store, lib *library.Library, dataDir, user, pass string) (*Server, error) {
+func New(st *store.Store, lib *library.Library, am *auth.Manager, dataDir string) (*Server, error) {
 	tmpl, err := template.ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
-		st: st, lib: lib, dataDir: dataDir, user: user, pass: pass,
+		st: st, lib: lib, auth: am, dataDir: dataDir,
 		tmpl: tmpl, loc: time.Local,
 	}, nil
 }
@@ -50,49 +49,147 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(static)))
 
 	mux.HandleFunc("GET /{$}", s.page)
-	mux.HandleFunc("GET /api/summary", s.basicAuth(s.apiSummary))
-	mux.HandleFunc("GET /api/collections", s.basicAuth(s.apiCollections))
-	mux.HandleFunc("POST /api/collections", s.basicAuth(s.apiCreateCollection))
-	mux.HandleFunc("DELETE /api/collections/{id}", s.basicAuth(s.apiDeleteCollection))
-	mux.HandleFunc("POST /api/collections/{id}/books/{bid}", s.basicAuth(s.apiAddToCollection))
-	mux.HandleFunc("DELETE /api/collections/{id}/books/{bid}", s.basicAuth(s.apiRemoveFromCollection))
-	mux.HandleFunc("GET /api/library", s.basicAuth(s.apiLibrary))
+	mux.HandleFunc("GET /login", s.loginPage)
+	mux.HandleFunc("POST /api/login", s.apiLogin)
+	mux.HandleFunc("POST /api/setup", s.apiSetup)
+	mux.HandleFunc("POST /api/logout", s.apiLogout)
+	mux.HandleFunc("POST /api/account", s.auth.RequireJSON(s.apiAccount))
+	mux.HandleFunc("GET /api/summary", s.auth.RequireJSON(s.apiSummary))
+	mux.HandleFunc("GET /api/collections", s.auth.RequireJSON(s.apiCollections))
+	mux.HandleFunc("POST /api/collections", s.auth.RequireJSON(s.apiCreateCollection))
+	mux.HandleFunc("DELETE /api/collections/{id}", s.auth.RequireJSON(s.apiDeleteCollection))
+	mux.HandleFunc("POST /api/collections/{id}/books/{bid}", s.auth.RequireJSON(s.apiAddToCollection))
+	mux.HandleFunc("DELETE /api/collections/{id}/books/{bid}", s.auth.RequireJSON(s.apiRemoveFromCollection))
+	mux.HandleFunc("GET /api/library", s.auth.RequireJSON(s.apiLibrary))
 
 	// Sync manifest: the companion plugin pulls this to bulk-download the whole
 	// library to the Kobo, skipping what it already has.
-	mux.HandleFunc("GET /api/sync/manifest", s.basicAuth(s.apiSyncManifest))
+	mux.HandleFunc("GET /api/sync/manifest", s.auth.RequireJSON(s.apiSyncManifest))
 
 	// Stats upload: the KOReader companion plugin (or curl/USB script) POSTs
 	// the raw statistics.sqlite3 here.
-	mux.HandleFunc("POST /api/stats/upload", s.basicAuth(s.apiUpload))
+	mux.HandleFunc("POST /api/stats/upload", s.auth.RequireJSON(s.apiUpload))
 
 	// Cover proxy for the dashboard (reuses OPDS cover path under the hood).
-	mux.HandleFunc("GET /cover/{id}", s.cover)
-}
-
-// basicAuth wraps a handler with HTTP Basic auth when credentials are configured.
-func (s *Server) basicAuth(h http.HandlerFunc) http.HandlerFunc {
-	if s.user == "" {
-		return h
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := r.BasicAuth()
-		if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(s.user)) != 1 ||
-			subtle.ConstantTimeCompare([]byte(p), []byte(s.pass)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Booky"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		h(w, r)
-	}
+	mux.HandleFunc("GET /cover/{id}", s.auth.RequireJSON(s.cover))
 }
 
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.auth.Authenticate(r); !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	user, _ := s.auth.SessionUser(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	data := map[string]any{"HasLibrary": s.lib != nil, "Version": version.Version}
+	data := map[string]any{
+		"HasLibrary": s.lib != nil, "Version": version.Version,
+		"User": user, "AuthEnabled": s.auth.Enabled(),
+	}
 	if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
+	// Already logged in (or auth not set up and no account to create)?
+	if _, ok := s.auth.SessionUser(r); ok {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	data := map[string]any{
+		"Setup":   !s.auth.Enabled(), // first run: create the account instead
+		"Version": version.Version,
+	}
+	if err := s.tmpl.ExecuteTemplate(w, "login.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Username, Password string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if !s.auth.CheckPassword(req.Username, req.Password) {
+		// Slow down credential guessing a little; bcrypt already costs ~50ms.
+		time.Sleep(300 * time.Millisecond)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
+		return
+	}
+	if err := s.auth.StartSession(w, r, req.Username); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// apiSetup creates the first account. Only valid while no account exists.
+func (s *Server) apiSetup(w http.ResponseWriter, r *http.Request) {
+	if s.auth.Enabled() {
+		http.Error(w, "already configured", http.StatusForbidden)
+		return
+	}
+	var req struct{ Username, Password string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		strings.TrimSpace(req.Username) == "" {
+		http.Error(w, "username required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Password) < auth.MinPasswordLen {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": auth.ErrWeakPassword.Error()})
+		return
+	}
+	if err := s.auth.CreateUser(strings.TrimSpace(req.Username), req.Password); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.auth.StartSession(w, r, strings.TrimSpace(req.Username)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) apiLogout(w http.ResponseWriter, r *http.Request) {
+	s.auth.EndSession(w, r)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// apiAccount changes username and/or password for the logged-in user.
+func (s *Server) apiAccount(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.auth.SessionUser(r)
+	if !ok {
+		// Basic-auth callers can't manage the account; this is a browser flow.
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "login required"})
+		return
+	}
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewUsername     string `json:"new_username"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	newName := strings.TrimSpace(req.NewUsername)
+	if err := s.auth.UpdateUser(user, req.CurrentPassword, newName, req.NewPassword); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if newName == "" {
+		newName = user
+	}
+	// Password change killed all sessions — start a fresh one for this browser.
+	if req.NewPassword != "" {
+		if err := s.auth.StartSession(w, r, newName); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": newName})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

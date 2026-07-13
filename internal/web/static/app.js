@@ -1,7 +1,10 @@
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-const api = (p, o) => fetch(p, o).then(r => r.ok ? (r.status === 204 ? null : r.json()) : Promise.reject(r));
+const api = (p, o) => fetch(p, o).then(r => {
+  if (r.status === 401) { location.href = '/login'; return new Promise(() => {}); }
+  return r.ok ? (r.status === 204 ? null : r.json()) : Promise.reject(r);
+});
 
 let SUMMARY = null, LIBRARY = null;
 const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
@@ -366,6 +369,44 @@ $('#picker-search').oninput = e => {
 };
 
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// ---- account ----
+if ($('#account-btn')) {
+  const modal = $('#account-modal');
+  $('#account-btn').onclick = () => {
+    $('#acct-error').classList.add('hidden');
+    $('#acct-ok').classList.add('hidden');
+    modal.classList.remove('hidden');
+  };
+  $('#account-close').onclick = () => modal.classList.add('hidden');
+  $('#logout-btn').onclick = async () => {
+    await fetch('/api/logout', { method: 'POST' });
+    location.href = '/login';
+  };
+  $('#account-form').onsubmit = async e => {
+    e.preventDefault();
+    $('#acct-error').classList.add('hidden');
+    $('#acct-ok').classList.add('hidden');
+    const r = await fetch('/api/account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        current_password: $('#acct-current').value,
+        new_username: $('#acct-user').value.trim(),
+        new_password: $('#acct-pass').value,
+      }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      $('#acct-error').textContent = body.error || 'Update failed';
+      $('#acct-error').classList.remove('hidden');
+      return;
+    }
+    $('#acct-pass').value = '';
+    $('#acct-current').value = '';
+    $('#acct-ok').classList.remove('hidden');
+  };
+}
 
 window.addEventListener('resize', () => { if (SUMMARY) renderCharts(); });
 loadDash();

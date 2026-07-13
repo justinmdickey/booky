@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/justindickey/booky/internal/auth"
 	"github.com/justindickey/booky/internal/library"
 	"github.com/justindickey/booky/internal/store"
 )
@@ -24,27 +25,29 @@ const (
 )
 
 type Server struct {
-	lib   *library.Library
-	st    *store.Store
-	base  string // public base URL, may be empty (then derived from request)
+	lib  *library.Library
+	st   *store.Store
+	base string // public base URL, may be empty (then derived from request)
+	auth *auth.Manager
 }
 
-func New(lib *library.Library, st *store.Store, base string) *Server {
-	return &Server{lib: lib, st: st, base: strings.TrimRight(base, "/")}
+func New(lib *library.Library, st *store.Store, base string, am *auth.Manager) *Server {
+	return &Server{lib: lib, st: st, base: strings.TrimRight(base, "/"), auth: am}
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
 	if s.lib == nil {
 		return
 	}
-	mux.HandleFunc("GET /opds", s.root)
-	mux.HandleFunc("GET /opds/", s.root)
-	mux.HandleFunc("GET /opds/all", s.all)
-	mux.HandleFunc("GET /opds/recent", s.recent)
-	mux.HandleFunc("GET /opds/collections", s.collections)
-	mux.HandleFunc("GET /opds/collection/{id}", s.collection)
-	mux.HandleFunc("GET /opds/download/{id}/{format}", s.download)
-	mux.HandleFunc("GET /opds/cover/{id}", s.cover)
+	// OPDS clients speak HTTP Basic; same credentials as the dashboard.
+	mux.HandleFunc("GET /opds", s.auth.RequireBasic(s.root))
+	mux.HandleFunc("GET /opds/", s.auth.RequireBasic(s.root))
+	mux.HandleFunc("GET /opds/all", s.auth.RequireBasic(s.all))
+	mux.HandleFunc("GET /opds/recent", s.auth.RequireBasic(s.recent))
+	mux.HandleFunc("GET /opds/collections", s.auth.RequireBasic(s.collections))
+	mux.HandleFunc("GET /opds/collection/{id}", s.auth.RequireBasic(s.collection))
+	mux.HandleFunc("GET /opds/download/{id}/{format}", s.auth.RequireBasic(s.download))
+	mux.HandleFunc("GET /opds/cover/{id}", s.auth.RequireBasic(s.cover))
 }
 
 // ---- Atom/OPDS XML model ----
@@ -68,12 +71,12 @@ type link struct {
 }
 
 type entry struct {
-	Title   string  `xml:"title"`
-	ID      string  `xml:"id"`
-	Updated string  `xml:"updated"`
-	Author  *author `xml:"author,omitempty"`
+	Title   string   `xml:"title"`
+	ID      string   `xml:"id"`
+	Updated string   `xml:"updated"`
+	Author  *author  `xml:"author,omitempty"`
 	Content *content `xml:"content,omitempty"`
-	Links   []link  `xml:"link"`
+	Links   []link   `xml:"link"`
 }
 
 type author struct {
