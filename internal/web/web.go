@@ -46,7 +46,14 @@ func New(st *store.Store, lib *library.Library, am *auth.Manager, dataDir string
 
 func (s *Server) Register(mux *http.ServeMux) {
 	static, _ := newSubFS()
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(static)))
+	fileServer := http.FileServer(static)
+	// Embedded files carry no modtime, so FileServer emits no validators and
+	// browsers cache heuristically — stale JS after deploys. Force revalidation;
+	// templates append ?v=<version> so new builds bust caches outright.
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		fileServer.ServeHTTP(w, r)
+	})))
 
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /login", s.loginPage)
