@@ -25,21 +25,22 @@ import (
 var assets embed.FS
 
 type Server struct {
-	st      *store.Store
-	lib     *library.Library
-	auth    *auth.Manager
-	dataDir string
-	tmpl    *template.Template
-	loc     *time.Location
+	st           *store.Store
+	lib          *library.Library
+	auth         *auth.Manager
+	dataDir      string
+	statsExclude []string
+	tmpl         *template.Template
+	loc          *time.Location
 }
 
-func New(st *store.Store, lib *library.Library, am *auth.Manager, dataDir string) (*Server, error) {
+func New(st *store.Store, lib *library.Library, am *auth.Manager, dataDir string, statsExclude []string) (*Server, error) {
 	tmpl, err := template.ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
-		st: st, lib: lib, auth: am, dataDir: dataDir,
+		st: st, lib: lib, auth: am, dataDir: dataDir, statsExclude: statsExclude,
 		tmpl: tmpl, loc: time.Local,
 	}, nil
 }
@@ -68,6 +69,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/collections/{id}/books/{bid}", s.auth.RequireJSON(s.apiAddToCollection))
 	mux.HandleFunc("DELETE /api/collections/{id}/books/{bid}", s.auth.RequireJSON(s.apiRemoveFromCollection))
 	mux.HandleFunc("GET /api/library", s.auth.RequireJSON(s.apiLibrary))
+	mux.HandleFunc("POST /api/books/{md5}/excluded", s.auth.RequireJSON(s.apiBookExcluded))
+	mux.HandleFunc("POST /api/books/excluded", s.auth.RequireJSON(s.apiBooksExcluded))
 
 	// Sync manifest: the companion plugin pulls this to bulk-download the whole
 	// library to the Kobo, skipping what it already has.
@@ -220,6 +223,48 @@ func (s *Server) apiSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, sum)
+}
+
+// apiBookExcluded toggles whether a tracked book counts toward reading stats.
+func (s *Server) apiBookExcluded(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Excluded bool `json:"excluded"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ok, err := s.st.SetBookExcluded(r.PathValue("md5"), req.Excluded)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "unknown book", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "excluded": req.Excluded})
+}
+
+// apiBooksExcluded bulk-marks books as excluded from reading stats. The Booky
+// KOReader plugin calls this after each stats upload with the content hashes of
+// everything in the device's ignored folders (e.g. wallabag articles), so new
+// articles drop out of stats automatically. md5s with no book row are ignored.
+func (s *Server) apiBooksExcluded(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MD5s     []string `json:"md5s"`
+		Excluded bool     `json:"excluded"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	changed, err := s.st.SetBooksExcluded(req.MD5s, req.Excluded)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "changed": changed})
 }
 
 func (s *Server) apiCollections(w http.ResponseWriter, r *http.Request) {
@@ -386,7 +431,7 @@ func (s *Server) apiUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Close()
 
-	books, pages, err := stats.Ingest(s.st, dst)
+	books, pages, err := stats.Ingest(s.st, dst, s.statsExclude...)
 	if err != nil {
 		http.Error(w, "ingest failed: "+err.Error(), http.StatusBadRequest)
 		return

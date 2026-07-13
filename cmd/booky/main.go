@@ -76,7 +76,7 @@ func main() {
 	}
 
 	// Web dashboard + API.
-	websrv, err := web.New(st, lib, am, cfg.DataDir)
+	websrv, err := web.New(st, lib, am, cfg.DataDir, cfg.StatsExclude)
 	if err != nil {
 		log.Fatalf("init web: %v", err)
 	}

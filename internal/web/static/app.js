@@ -141,7 +141,10 @@ let rangeDays = 30;
 async function loadDash() {
   try { SUMMARY = await api('/api/summary'); }
   catch (e) { return; }
-  if (!SUMMARY || !SUMMARY.books_tracked) { $('#empty').classList.remove('hidden'); return; }
+  // books_tracked counts included books only; keep the dashboard up whenever
+  // anything was ingested so excluded books stay reachable via Manage.
+  if (!SUMMARY || !(SUMMARY.books || []).length) { $('#empty').classList.remove('hidden'); return; }
+  $('#empty').classList.add('hidden');
   $('#dash-content').classList.remove('hidden');
 
   $('#s-time').textContent = fmtDuration(SUMMARY.total_seconds);
@@ -239,7 +242,8 @@ function placeholder(b, cls) {
 
 function renderBooks() {
   const list = $('#book-list'); list.innerHTML = '';
-  const books = [...SUMMARY.books].sort((a, b) => b.last_open - a.last_open).slice(0, 12);
+  const books = SUMMARY.books.filter(b => !b.excluded)
+    .sort((a, b) => b.last_open - a.last_open).slice(0, 12);
   for (const b of books) {
     const row = document.createElement('div'); row.className = 'book-row';
     row.appendChild(coverEl(b, 'cover'));
@@ -369,6 +373,47 @@ $('#picker-search').oninput = e => {
 };
 
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// ---- manage tracked books (exclude from stats) ----
+$('#manage-books').onclick = () => {
+  $('#manage-search').value = '';
+  renderManageList('');
+  $('#manage-modal').classList.remove('hidden');
+};
+$('#manage-close').onclick = () => $('#manage-modal').classList.add('hidden');
+$('#manage-search').oninput = e => renderManageList(e.target.value.toLowerCase());
+
+function renderManageList(q) {
+  const el = $('#manage-list'); el.innerHTML = '';
+  const books = (SUMMARY?.books || [])
+    .filter(b => !q || (b.title + ' ' + b.authors).toLowerCase().includes(q))
+    .sort((a, b) => b.last_open - a.last_open);
+  if (!books.length) { el.innerHTML = '<p class="muted">No matching books.</p>'; return; }
+  for (const b of books) {
+    const row = document.createElement('div');
+    row.className = 'manage-row' + (b.excluded ? ' off' : '');
+    const meta = document.createElement('div'); meta.className = 'meta';
+    meta.innerHTML = `<div class="title">${esc(b.title || 'Untitled')}</div>
+      <div class="sub">${esc(b.authors || '')}${b.seconds ? ' · ' + fmtDuration(b.seconds) : ''}</div>`;
+    const btn = document.createElement('button');
+    btn.className = b.excluded ? 'primary' : 'ghost';
+    btn.textContent = b.excluded ? 'Include' : 'Exclude';
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/books/${b.md5}/excluded`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ excluded: !b.excluded }),
+        });
+        await loadDash();
+        renderManageList($('#manage-search').value.toLowerCase());
+      } catch (e) { btn.disabled = false; }
+    };
+    row.append(meta, btn);
+    el.appendChild(row);
+  }
+}
 
 // ---- account ----
 if ($('#account-btn')) {

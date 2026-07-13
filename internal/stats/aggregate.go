@@ -50,6 +50,7 @@ type BookStat struct {
 	Highlights   int64   `json:"highlights"`
 	CalibreID    int64   `json:"calibre_id"` // filled in by web layer if library present
 	Finished     bool    `json:"finished"`
+	Excluded     bool    `json:"excluded"` // present in Books for management UI, but not counted
 }
 
 type Session struct {
@@ -68,9 +69,10 @@ func Compute(st *store.Store, loc *time.Location) (Summary, error) {
 		loc = time.Local
 	}
 
-	// Per-book aggregates.
+	// Per-book aggregates. Excluded books ride along (the management UI needs
+	// them) but are kept out of every total below.
 	rows, err := db.Query(`
-SELECT b.md5, b.title, b.authors, b.series, b.pages, b.highlights, b.last_open,
+SELECT b.md5, b.title, b.authors, b.series, b.pages, b.highlights, b.last_open, b.excluded,
        IFNULL(SUM(p.duration),0)        AS secs,
        COUNT(DISTINCT p.page)            AS pages_read,
        IFNULL(MAX(p.page),0)             AS max_page,
@@ -86,7 +88,7 @@ ORDER BY secs DESC`)
 		var b BookStat
 		var maxPage int64
 		if err := rows.Scan(&b.MD5, &b.Title, &b.Authors, &b.Series, &b.Pages,
-			&b.Highlights, &b.LastOpen, &b.Seconds, &b.PagesRead, &maxPage, &b.FirstRead); err != nil {
+			&b.Highlights, &b.LastOpen, &b.Excluded, &b.Seconds, &b.PagesRead, &maxPage, &b.FirstRead); err != nil {
 			return s, err
 		}
 		// "Read this far" is the furthest page reached, not the count of distinct
@@ -108,11 +110,13 @@ ORDER BY secs DESC`)
 			b.PagesPerHour = float64(b.PagesRead) * 3600.0 / float64(b.Seconds)
 		}
 		b.Finished = b.Pages > 0 && reached >= b.Pages-1 // allow off-by-one
-		s.TotalSeconds += b.Seconds
-		s.TotalPages += b.PagesRead
-		s.BooksTracked++
-		if b.Finished {
-			s.BooksFinished++
+		if !b.Excluded {
+			s.TotalSeconds += b.Seconds
+			s.TotalPages += b.PagesRead
+			s.BooksTracked++
+			if b.Finished {
+				s.BooksFinished++
+			}
 		}
 		s.Books = append(s.Books, b)
 	}
@@ -144,7 +148,9 @@ ORDER BY secs DESC`)
 }
 
 func (s *Summary) computeDaily(db *sql.DB, loc *time.Location) error {
-	rows, err := db.Query(`SELECT page, start_time, duration FROM page_stat`)
+	rows, err := db.Query(`
+SELECT page, start_time, duration FROM page_stat
+WHERE md5 NOT IN (SELECT md5 FROM book WHERE excluded=1)`)
 	if err != nil {
 		return err
 	}
@@ -259,6 +265,7 @@ func (s *Summary) computeSessions(db *sql.DB) error {
 	rows, err := db.Query(`
 SELECT p.md5, IFNULL(b.title,''), p.start_time, p.duration, p.page
 FROM page_stat p LEFT JOIN book b ON b.md5=p.md5
+WHERE IFNULL(b.excluded,0)=0
 ORDER BY p.md5, p.start_time`)
 	if err != nil {
 		return err

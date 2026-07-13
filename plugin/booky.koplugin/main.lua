@@ -31,6 +31,7 @@ local Booky = WidgetContainer:extend{
 
 local STATS_DB = DataStorage:getSettingsDir() .. "/statistics.sqlite3"
 local MIN_INTERVAL = 60 * 30 -- throttle auto-uploads to once per 30 min
+local BOOK_EXTS = { epub=true, kepub=true, pdf=true, mobi=true, azw3=true, cbz=true, fb2=true }
 
 function Booky:init()
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/booky.lua")
@@ -43,6 +44,7 @@ function Booky:init()
     self.auto_sync_books = self.settings:isTrue("auto_sync_books")
     self.organize_by_author = self.settings:nilOrTrue("organize_by_author")
     self.last_book_sync = self.settings:readSetting("last_book_sync") or 0
+    self.exclude_dirs = self.settings:readSetting("exclude_dirs") or ""
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
 end
@@ -58,6 +60,41 @@ function Booky:defaultDownloadDir()
         return "/mnt/onboard/Booky"
     end
     return DataStorage:getDataDir() .. "/Booky"
+end
+
+-- detectWallabagDir reads the stock wallabag plugin's settings and returns its
+-- article download folder, or nil. Used as the default "ignored folder" so
+-- synced articles stay out of reading stats without any configuration.
+function Booky:detectWallabagDir()
+    local ok, dir = pcall(function()
+        local wb = LuaSettings:open(DataStorage:getSettingsDir() .. "/wallabag.lua")
+        local data = wb:readSetting("wallabag")
+        -- The directory key has lived both nested under "wallabag" and at the
+        -- top level across KOReader versions.
+        local d = (type(data) == "table" and data.directory) or wb:readSetting("directory")
+        return type(d) == "string" and d or nil
+    end)
+    if ok and dir and dir ~= "" then
+        return (dir:gsub("/+$", ""))
+    end
+    return nil
+end
+
+-- excludeDirList resolves the folders whose books are excluded from reading
+-- stats: the user setting (comma-separated) if set, else the auto-detected
+-- wallabag folder.
+function Booky:excludeDirList()
+    local dirs = {}
+    if self.exclude_dirs ~= "" then
+        for part in self.exclude_dirs:gmatch("[^,]+") do
+            local d = part:gsub("^%s+", ""):gsub("%s+$", ""):gsub("/+$", "")
+            if d ~= "" then table.insert(dirs, d) end
+        end
+    else
+        local wb = self:detectWallabagDir()
+        if wb then table.insert(dirs, wb) end
+    end
+    return dirs
 end
 
 -- sanitizeComponent makes a string safe as a single FAT path segment (the Kobo
@@ -147,6 +184,23 @@ function Booky:addToMainMenu(menu_items)
                     self.auto_upload = not self.auto_upload
                     self.settings:saveSetting("auto_upload", self.auto_upload)
                     self.settings:flush()
+                end,
+            },
+            {
+                text_func = function()
+                    local dirs = self:excludeDirList()
+                    if #dirs == 0 then return _("Ignored folders (stats): none") end
+                    local label = table.concat(dirs, ", ")
+                    if self.exclude_dirs == "" then
+                        label = label .. " " .. _("(auto: wallabag)")
+                    end
+                    return T(_("Ignored folders (stats): %1"), label)
+                end,
+                keep_menu_open = true,
+                help_text = _("Books inside these folders (comma-separated) are excluded from reading stats on the server — e.g. synced wallabag articles. Defaults to the wallabag plugin's download folder when left empty."),
+                callback = function()
+                    self:editSetting("exclude_dirs", _("Ignored folders (comma-separated)"),
+                        self:detectWallabagDir() or _("e.g. /mnt/onboard/wallabag"))
                 end,
             },
             {
@@ -305,11 +359,19 @@ function Booky:doUpload(verbose)
         self.settings:flush()
         local summary = self:summarizeResponse(respbody)
         logger.info("Booky: stats uploaded OK", summary)
+        -- Best-effort: tell the server which books live in ignored folders so
+        -- they're excluded from reading stats. Never fails the upload.
+        local exc_ok, excluded = pcall(function() return self:syncExcludedBooks() end)
+        if not exc_ok then
+            logger.warn("Booky: excluded-books sync failed", excluded)
+            excluded = nil
+        end
         if verbose then
-            UIManager:show(InfoMessage:new{
-                text = T(_("Reading stats uploaded to Booky.\n%1"), summary),
-                timeout = 3,
-            })
+            local text = T(_("Reading stats uploaded to Booky.\n%1"), summary)
+            if excluded and excluded > 0 then
+                text = text .. "\n" .. T(_("%1 article(s) in ignored folders kept out of stats."), excluded)
+            end
+            UIManager:show(InfoMessage:new{ text = text, timeout = 3 })
         end
     else
         local msg
@@ -343,6 +405,69 @@ function Booky:summarizeResponse(respbody)
     end
     -- Fall back to the raw body, trimmed, so we never print a Lua table address.
     return (body:gsub("%s+", " ")):sub(1, 200)
+end
+
+-- syncExcludedBooks fingerprints every book file in the ignored folders (the
+-- same partial-MD5 the statistics DB keys on) and tells the server to exclude
+-- those books from reading stats. The server flag is sticky, so an article
+-- later deleted from the device stays excluded. Returns how many hashes were
+-- sent, or 0.
+function Booky:syncExcludedBooks()
+    local dirs = self:excludeDirList()
+    if #dirs == 0 then return 0 end
+    local md5s = {}
+    for _, dir in ipairs(dirs) do
+        if lfs.attributes(dir, "mode") == "directory" then
+            self:collectHashes(dir, md5s)
+        end
+    end
+    if #md5s == 0 then return 0 end
+
+    -- Hashes are hex strings, so the JSON is safe to assemble by hand.
+    local body = '{"excluded":true,"md5s":["' .. table.concat(md5s, '","') .. '"]}'
+    local http = require("socket.http")
+    local ltn12 = require("ltn12")
+    local result, code = http.request{
+        url = self.server_url:gsub("/+$", "") .. "/api/books/excluded",
+        method = "POST",
+        headers = self:authHeaders({
+            ["Content-Type"] = "application/json",
+            ["Content-Length"] = tostring(#body),
+        }),
+        source = ltn12.source.string(body),
+        sink = ltn12.sink.table({}),
+    }
+    local status = tonumber(code)
+    if not (result and status == 200) then
+        logger.warn("Booky: excluded-books request failed", code, status)
+        return 0
+    end
+    logger.info("Booky: excluded-books synced", #md5s)
+    return #md5s
+end
+
+-- collectHashes appends the partial-MD5 of every book file under root
+-- (recursively) to out.
+function Booky:collectHashes(root, out)
+    local stack = { root }
+    while #stack > 0 do
+        local dir = table.remove(stack)
+        for entry in lfs.dir(dir) do
+            if entry ~= "." and entry ~= ".." then
+                local p = dir .. "/" .. entry
+                local mode = lfs.attributes(p, "mode")
+                if mode == "directory" then
+                    table.insert(stack, p)
+                elseif mode == "file" then
+                    local ext = entry:match("%.([^.]+)$")
+                    if ext and BOOK_EXTS[ext:lower()] then
+                        local h = self:partialMD5(p)
+                        if h then table.insert(out, h) end
+                    end
+                end
+            end
+        end
+    end
 end
 
 --[[ ---------------------------------------------------------------------------
@@ -433,7 +558,7 @@ end
 function Booky:scanLocalHashes(Trapper)
     local hashes = {}
     local paths = {}
-    local exts = { epub=true, kepub=true, pdf=true, mobi=true, azw3=true, cbz=true, fb2=true }
+    local exts = BOOK_EXTS
     local stack = { self.download_dir }
     local n = 0
     while #stack > 0 do

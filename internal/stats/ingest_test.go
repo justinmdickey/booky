@@ -94,6 +94,80 @@ func TestIngestPrunesStaleBooks(t *testing.T) {
 	}
 }
 
+// TestExcludedBooks verifies both exclusion paths: an ingest-time pattern
+// match and a manual toggle. Excluded books must vanish from every aggregate
+// but stay listed (flagged) for the management UI, and a manual exclusion must
+// survive a re-ingest.
+func TestExcludedBooks(t *testing.T) {
+	dir := t.TempDir()
+	koPath := filepath.Join(dir, "statistics.sqlite3")
+	makeKOReaderDB(t, koPath)
+
+	st, err := store.Open(filepath.Join(dir, "booky.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// Pattern exclusion at ingest: Hyperion matches, Dune doesn't.
+	if _, _, err := Ingest(st, koPath, "hyperion"); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	sum, err := Compute(st, time.Local)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if sum.BooksTracked != 1 {
+		t.Errorf("books tracked = %d, want 1 (Hyperion pattern-excluded)", sum.BooksTracked)
+	}
+	if want := int64(60 * 55); sum.TotalSeconds != want { // Dune only
+		t.Errorf("total seconds = %d want %d", sum.TotalSeconds, want)
+	}
+	if len(sum.Books) != 2 {
+		t.Fatalf("excluded book missing from Books list: %d", len(sum.Books))
+	}
+	for _, b := range sum.Books {
+		if want := b.MD5 == "md5hyp"; b.Excluded != want {
+			t.Errorf("book %s excluded=%v want %v", b.MD5, b.Excluded, want)
+		}
+	}
+	for _, s := range sum.RecentSessions {
+		if s.MD5 == "md5hyp" {
+			t.Error("excluded book leaked into recent sessions")
+		}
+	}
+
+	// Manual exclusion sticks across a re-ingest without patterns.
+	if ok, err := st.SetBookExcluded("md5dune", true); err != nil || !ok {
+		t.Fatalf("SetBookExcluded: ok=%v err=%v", ok, err)
+	}
+	if _, _, err := Ingest(st, koPath); err != nil {
+		t.Fatalf("re-ingest: %v", err)
+	}
+	sum, err = Compute(st, time.Local)
+	if err != nil {
+		t.Fatalf("compute2: %v", err)
+	}
+	if sum.TotalSeconds != 0 || sum.BooksTracked != 0 {
+		t.Errorf("manual exclusion lost on re-ingest: secs=%d tracked=%d", sum.TotalSeconds, sum.BooksTracked)
+	}
+	if sum.DaysRead != 0 || len(sum.RecentSessions) != 0 {
+		t.Errorf("excluded pages still in daily/sessions: days=%d sessions=%d", sum.DaysRead, len(sum.RecentSessions))
+	}
+
+	// Re-include restores counting.
+	if ok, err := st.SetBookExcluded("md5dune", false); err != nil || !ok {
+		t.Fatalf("re-include: ok=%v err=%v", ok, err)
+	}
+	sum, err = Compute(st, time.Local)
+	if err != nil {
+		t.Fatalf("compute3: %v", err)
+	}
+	if want := int64(60 * 55); sum.TotalSeconds != want {
+		t.Errorf("after re-include total seconds = %d want %d", sum.TotalSeconds, want)
+	}
+}
+
 func TestIngestAndCompute(t *testing.T) {
 	dir := t.TempDir()
 	koPath := filepath.Join(dir, "statistics.sqlite3")

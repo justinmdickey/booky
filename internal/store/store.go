@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -73,7 +74,8 @@ CREATE TABLE IF NOT EXISTS book (
     highlights       INTEGER,
     notes            INTEGER,
     total_read_time  INTEGER,
-    total_read_pages INTEGER
+    total_read_pages INTEGER,
+    excluded         INTEGER NOT NULL DEFAULT 0  -- 1 = leave out of reading stats
 );
 
 -- Per-page reading sessions, mirrored from KOReader's page_stat_data, keyed by
@@ -121,8 +123,56 @@ CREATE TABLE IF NOT EXISTS web_session (
 );
 CREATE INDEX IF NOT EXISTS web_session_exp ON web_session(expires_at);
 `
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Columns added after the initial release; ALTER is a no-op error on DBs
+	// that already have them.
+	if _, err := s.db.Exec(`ALTER TABLE book ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	return nil
+}
+
+// SetBookExcluded flips whether a book counts toward reading stats. Reports
+// whether a row with that md5 existed.
+func (s *Store) SetBookExcluded(md5 string, excluded bool) (bool, error) {
+	res, err := s.db.Exec(`UPDATE book SET excluded=? WHERE md5=?`, excluded, md5)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetBooksExcluded bulk-applies the excluded flag to every book whose md5 is
+// in the list (unknown md5s are ignored — a file in an ignored folder that was
+// never opened has no stats to exclude). Returns how many rows changed.
+func (s *Store) SetBooksExcluded(md5s []string, excluded bool) (int64, error) {
+	if len(md5s) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	up, err := tx.Prepare(`UPDATE book SET excluded=? WHERE md5=? AND excluded != ?`)
+	if err != nil {
+		return 0, err
+	}
+	defer up.Close()
+	var changed int64
+	for _, md5 := range md5s {
+		res, err := up.Exec(excluded, md5, excluded)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		changed += n
+	}
+	return changed, tx.Commit()
 }
 
 // ---- Users ----

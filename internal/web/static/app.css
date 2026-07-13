@@ -164,6 +164,19 @@ input[type=search] { border: 1px solid var(--line); background: var(--surface); 
 .modal-box input { margin-bottom: 1rem; }
 .modal-box .library-grid { overflow-y: auto; }
 
+/* ---- manage tracked books ---- */
+.manage-hint { margin: 0 0 .8rem; font-size: .82rem; }
+.manage-list { overflow-y: auto; display: flex; flex-direction: column; gap: .35rem; }
+.manage-row { display: flex; align-items: center; gap: .9rem; padding: .35rem .2rem;
+  border-bottom: 1px solid var(--line); }
+.manage-row:last-child { border-bottom: none; }
+.manage-row .meta { flex: 1; min-width: 0; }
+.manage-row .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.manage-row .sub { color: var(--muted); font-size: .82rem; }
+.manage-row.off .meta { opacity: .45; }
+.manage-row.off .title { text-decoration: line-through; }
+.manage-row button { flex-shrink: 0; }
+
 .footer { text-align: center; color: var(--muted); font-size: .8rem;
   padding: 1.5rem 1rem 2.5rem; }
 .footer .ver { font-family: ui-monospace, "SF Mono", Menlo, monospace;

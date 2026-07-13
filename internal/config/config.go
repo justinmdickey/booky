@@ -31,6 +31,11 @@ type Config struct {
 
 	// PublicURL is the externally reachable base URL (used in OPDS links).
 	PublicURL string
+
+	// StatsExclude holds case-insensitive substrings matched against a book's
+	// title and authors at ingest time; matches are excluded from reading stats
+	// (e.g. "wallabag" to keep synced articles out). Comma-separated in the env.
+	StatsExclude []string
 }
 
 func Load() Config {
@@ -42,8 +47,19 @@ func Load() Config {
 		OPDSPass:          env("BOOKY_AUTH_PASS", ""),
 		AllowRegistration: envBool("BOOKY_ALLOW_REGISTRATION", true),
 		PublicURL:         strings.TrimRight(env("BOOKY_PUBLIC_URL", ""), "/"),
+		StatsExclude:      envList("BOOKY_STATS_EXCLUDE"),
 	}
 	return c
+}
+
+func envList(key string) []string {
+	var out []string
+	for _, p := range strings.Split(env(key, ""), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func env(key, def string) string {

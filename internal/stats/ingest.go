@@ -5,6 +5,7 @@ package stats
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/justindickey/booky/internal/store"
 	_ "modernc.org/sqlite"
@@ -13,7 +14,13 @@ import (
 // Ingest reads an uploaded KOReader statistics.sqlite3 (at srcPath, opened
 // read-only and immutable) and merges its book + page-stat rows into Booky's
 // store, keyed by the partial-MD5 fingerprint. Returns counts for feedback.
-func Ingest(st *store.Store, srcPath string) (books int, pages int, err error) {
+//
+// excludePatterns are case-insensitive substrings matched against each book's
+// title and authors; matches are marked excluded from reading stats. The flag
+// is sticky: a manual exclusion survives re-ingests, and a pattern match
+// re-applies on every upload (so new wallabag-style articles stay out without
+// per-book clicks).
+func Ingest(st *store.Store, srcPath string, excludePatterns ...string) (books int, pages int, err error) {
 	dsn := fmt.Sprintf("file:%s?mode=ro&immutable=1", srcPath)
 	src, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -51,8 +58,8 @@ FROM book`)
 	defer bookRows.Close()
 
 	upBook, err := tx.Prepare(`
-INSERT INTO book(md5,title,authors,series,language,pages,last_open,highlights,notes,total_read_time,total_read_pages)
-VALUES(?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO book(md5,title,authors,series,language,pages,last_open,highlights,notes,total_read_time,total_read_pages,excluded)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(md5) DO UPDATE SET
   title=excluded.title, authors=excluded.authors, series=excluded.series,
   language=excluded.language, pages=MAX(book.pages,excluded.pages),
@@ -60,7 +67,8 @@ ON CONFLICT(md5) DO UPDATE SET
   highlights=MAX(book.highlights,excluded.highlights),
   notes=MAX(book.notes,excluded.notes),
   total_read_time=MAX(book.total_read_time,excluded.total_read_time),
-  total_read_pages=MAX(book.total_read_pages,excluded.total_read_pages)`)
+  total_read_pages=MAX(book.total_read_pages,excluded.total_read_pages),
+  excluded=MAX(book.excluded,excluded.excluded)`)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -79,7 +87,7 @@ ON CONFLICT(md5) DO UPDATE SET
 		idToMD5[id] = md5
 		seen[md5] = true
 		if _, err := upBook.Exec(md5, title, authors, series, lang, npages,
-			lastOpen, hl, notes, trt, trp); err != nil {
+			lastOpen, hl, notes, trt, trp, matchesExclude(title, authors, excludePatterns)); err != nil {
 			return 0, 0, err
 		}
 		books++
@@ -150,6 +158,21 @@ ON CONFLICT(md5,page,start_time) DO UPDATE SET
 		return 0, 0, err
 	}
 	return books, pages, nil
+}
+
+// matchesExclude reports whether any pattern appears (case-insensitively) in
+// the book's title or authors.
+func matchesExclude(title, authors string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	hay := strings.ToLower(title + "\n" + authors)
+	for _, p := range patterns {
+		if strings.Contains(hay, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
 }
 
 // pruneMissing deletes rows from the given table (book or page_stat) whose md5
