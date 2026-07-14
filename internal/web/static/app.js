@@ -38,11 +38,24 @@ $$('.tab').forEach(t => t.onclick = () => {
 });
 
 // ---- theme ----
-const THEME_ICONS = { auto: '◐', light: '○', dark: '●' };
+// Inline SVGs: font glyphs (☀︎/☾) render inconsistently across platforms.
+const THEME_ICONS = {
+  light: `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <circle cx="12" cy="12" r="4.2"/>
+    <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7"/>
+  </svg>`,
+  dark: `<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor">
+    <path d="M20.4 14.3A8.5 8.5 0 0 1 9.7 3.6a.6.6 0 0 0-.8-.7 9.3 9.3 0 1 0 12.2 12.2.6.6 0 0 0-.7-.8z"/>
+  </svg>`,
+  auto: `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
+    <circle cx="12" cy="12" r="8.2"/>
+    <path d="M12 3.8a8.2 8.2 0 0 1 0 16.4z" fill="currentColor" stroke="none"/>
+  </svg>`,
+};
 function reflectTheme() {
   const cur = document.documentElement.dataset.theme;
   const btn = $('#theme-toggle');
-  btn.textContent = THEME_ICONS[cur] || '◐';
+  btn.innerHTML = THEME_ICONS[cur] || THEME_ICONS.auto;
   btn.title = `Theme: ${cur} (click to switch)`;
 }
 $('#theme-toggle').onclick = () => {

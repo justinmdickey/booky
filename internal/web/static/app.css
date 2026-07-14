@@ -64,6 +64,7 @@ code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 .tab.active, .tab.active:hover { background: var(--accent); color: var(--on-accent); }
 .ghost { border: 1px solid var(--line); background: var(--surface); color: var(--text);
   border-radius: 10px; width: 34px; height: 34px; cursor: pointer; font-size: 1rem;
+  display: inline-flex; align-items: center; justify-content: center;
   transition: background .12s, border-color .12s; }
 .ghost:hover { background: var(--surface-2); border-color: var(--muted); }
 .ghost.wide { width: auto; height: auto; padding: .5rem .9rem; font-size: .9rem; font-weight: 600; }
