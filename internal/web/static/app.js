@@ -38,15 +38,24 @@ $$('.tab').forEach(t => t.onclick = () => {
 });
 
 // ---- theme ----
+const THEME_ICONS = { auto: '◐', light: '○', dark: '●' };
+function reflectTheme() {
+  const cur = document.documentElement.dataset.theme;
+  const btn = $('#theme-toggle');
+  btn.textContent = THEME_ICONS[cur] || '◐';
+  btn.title = `Theme: ${cur} (click to switch)`;
+}
 $('#theme-toggle').onclick = () => {
   const order = ['auto', 'light', 'dark'];
   const cur = document.documentElement.dataset.theme;
   const next = order[(order.indexOf(cur) + 1) % order.length];
   document.documentElement.dataset.theme = next;
   localStorage.theme = next;
+  reflectTheme();
   if (SUMMARY) renderCharts();
 };
 if (localStorage.theme) document.documentElement.dataset.theme = localStorage.theme;
+reflectTheme();
 
 // ---- canvas helpers (retina) ----
 function prep(canvas) {
@@ -69,14 +78,17 @@ function barChart(canvas, labels, values, opts = {}) {
   const accent = css('--accent'), muted = css('--muted');
   ctx.fillStyle = muted; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
   const bars = [];
+  // Cap bar width so sparse data (a single reading day) doesn't render one
+  // slab across the whole card; bars stay centered in their slot.
+  const barW = Math.min(bw * .7, 42);
   for (let i = 0; i < n; i++) {
     const v = values[i];
     const bh = (h - pad.t - pad.b) * (v / max);
-    const x = pad.l + i * bw, y = h - pad.b - bh;
-    bars.push({ x: x + bw * .15, y, w: bw * .7, h: bh, i });
+    const x = pad.l + i * bw + (bw - barW) / 2, y = h - pad.b - bh;
+    bars.push({ x, y, w: barW, h: bh, i, sx: pad.l + i * bw, sw: bw });
     ctx.fillStyle = accent;
-    const r = Math.min(3, bw * .4);
-    roundRect(ctx, x + bw * .15, y, bw * .7, bh, r);
+    const r = Math.min(3, barW * .4);
+    roundRect(ctx, x, y, barW, bh, r);
     ctx.fill();
     if (opts.labelEvery && i % opts.labelEvery === 0) {
       ctx.fillStyle = muted;
@@ -106,7 +118,8 @@ function attachBarHover(canvas, bars, labels, values, fmt) {
   canvas.onmousemove = e => {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const b = bars.find(bar => x >= bar.x && x <= bar.x + bar.w);
+    // Hit-test the whole slot, not just the (possibly narrow) bar.
+    const b = bars.find(bar => x >= bar.sx && x <= bar.sx + bar.sw);
     if (!b) { tip.classList.remove('show'); return; }
     tip.innerHTML = fmt ? fmt(b.i, labels[b.i], values[b.i]) : `${labels[b.i]}: ${values[b.i]}`;
     tip.classList.add('show');
@@ -396,7 +409,7 @@ function renderManageList(q) {
     meta.innerHTML = `<div class="title">${esc(b.title || 'Untitled')}</div>
       <div class="sub">${esc(b.authors || '')}${b.seconds ? ' · ' + fmtDuration(b.seconds) : ''}</div>`;
     const btn = document.createElement('button');
-    btn.className = b.excluded ? 'primary' : 'ghost';
+    btn.className = b.excluded ? 'primary' : 'ghost wide';
     btn.textContent = b.excluded ? 'Include' : 'Exclude';
     btn.onclick = async () => {
       btn.disabled = true;
@@ -452,6 +465,19 @@ if ($('#account-btn')) {
     $('#acct-ok').classList.remove('hidden');
   };
 }
+
+// Close any modal by clicking its backdrop or pressing Escape.
+function closeModal(m) {
+  if (m.classList.contains('hidden')) return;
+  m.classList.add('hidden');
+  if (m.id === 'picker') loadCollections(); // same refresh as the ✕ button
+}
+$$('.modal').forEach(m => m.addEventListener('click', e => {
+  if (e.target === m) closeModal(m);
+}));
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') $$('.modal').forEach(closeModal);
+});
 
 window.addEventListener('resize', () => { if (SUMMARY) renderCharts(); });
 loadDash();
