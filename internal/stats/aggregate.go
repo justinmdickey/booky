@@ -62,7 +62,7 @@ type BookStat struct {
 	Finished     bool    `json:"finished"`
 	Excluded     bool    `json:"excluded"`      // present in Books for management UI, but not counted
 	FinishedAt   int64   `json:"finished_at"`   // first time the last page was reached, 0 if unfinished
-	ForecastDays float64 `json:"forecast_days"` // estimated days to finish at recent pace, 0 if n/a
+	ForecastSecs int64   `json:"forecast_seconds"` // estimated reading time to finish at this book's pace, 0 if n/a
 }
 
 type Session struct {
@@ -81,16 +81,13 @@ func Compute(st *store.Store, loc *time.Location) (Summary, error) {
 		loc = time.Local
 	}
 
-	// FinishedAt and forecast pace are each computed with one grouped query up
-	// front, then merged in below — avoids an N+1 query per book.
+	// FinishedAt is computed with one grouped query up front, then merged in
+	// below — avoids an N+1 query per book.
 	finishedAt, err := finishedAtByMD5(db)
 	if err != nil {
 		return s, err
 	}
-	pace14, err := pace14ByMD5(db, loc)
-	if err != nil {
-		return s, err
-	}
+	active30 := time.Now().AddDate(0, 0, -30).Unix()
 
 	// Per-book aggregates. Excluded books ride along (the management UI needs
 	// them) but are kept out of every total below.
@@ -99,7 +96,8 @@ SELECT b.md5, b.title, b.authors, b.series, b.pages, b.highlights, b.last_open, 
        IFNULL(SUM(p.duration),0)        AS secs,
        COUNT(DISTINCT p.page)            AS pages_read,
        IFNULL(MAX(p.page),0)             AS max_page,
-       IFNULL(MIN(p.start_time),0)       AS first_read
+       IFNULL(MIN(p.start_time),0)       AS first_read,
+       IFNULL(MAX(p.start_time),0)       AS last_read
 FROM book b LEFT JOIN page_stat p ON p.md5 = b.md5
 GROUP BY b.md5
 ORDER BY secs DESC`)
@@ -109,9 +107,9 @@ ORDER BY secs DESC`)
 	defer rows.Close()
 	for rows.Next() {
 		var b BookStat
-		var maxPage int64
+		var maxPage, lastRead int64
 		if err := rows.Scan(&b.MD5, &b.Title, &b.Authors, &b.Series, &b.Pages,
-			&b.Highlights, &b.LastOpen, &b.Excluded, &b.Seconds, &b.PagesRead, &maxPage, &b.FirstRead); err != nil {
+			&b.Highlights, &b.LastOpen, &b.Excluded, &b.Seconds, &b.PagesRead, &maxPage, &b.FirstRead, &lastRead); err != nil {
 			return s, err
 		}
 		// "Read this far" is the furthest page reached, not the count of distinct
@@ -135,11 +133,12 @@ ORDER BY secs DESC`)
 		b.Finished = b.Pages > 0 && reached >= b.Pages-1 // allow off-by-one
 		if b.Finished {
 			b.FinishedAt = finishedAt[b.MD5]
-		} else if !b.Excluded && b.Pages > 0 {
-			if pace, ok := pace14[b.MD5]; ok && pace > 0 {
-				remaining := b.Pages - reached
-				b.ForecastDays = float64(remaining) / pace
-			}
+		} else if !b.Excluded && b.Pages > 0 && b.PagesPerHour > 0 &&
+			(b.LastOpen >= active30 || lastRead >= active30) {
+			// Reading time left at this book's own pace — an amount of reading,
+			// not a calendar guess. Only for books touched in the last 30 days.
+			remaining := b.Pages - reached
+			b.ForecastSecs = int64(float64(remaining) / b.PagesPerHour * 3600)
 		}
 		if !b.Excluded {
 			s.TotalSeconds += b.Seconds
@@ -201,58 +200,6 @@ GROUP BY p.md5`)
 		out[md5] = t
 	}
 	return out, rows.Err()
-}
-
-// pace14ByMD5 returns each book's recent reading pace (distinct pages read
-// per active day, over the last 14 days) for every book with any page_stat
-// activity in the last 30 days. A book present in the returned map but with
-// pace 0 was active in the 30-day window but not the 14-day one. One grouped
-// query, not one per book.
-func pace14ByMD5(db *sql.DB, loc *time.Location) (map[string]float64, error) {
-	now := time.Now().In(loc)
-	cutoff30 := now.AddDate(0, 0, -30).Unix()
-	cutoff14 := now.AddDate(0, 0, -14).Unix()
-
-	rows, err := db.Query(`SELECT md5, page, start_time FROM page_stat WHERE start_time >= ?`, cutoff30)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	type paceInfo struct {
-		pages map[int64]struct{}
-		days  map[string]struct{}
-	}
-	infos := map[string]*paceInfo{}
-	for rows.Next() {
-		var md5 string
-		var page, start int64
-		if err := rows.Scan(&md5, &page, &start); err != nil {
-			return nil, err
-		}
-		info := infos[md5]
-		if info == nil {
-			info = &paceInfo{pages: map[int64]struct{}{}, days: map[string]struct{}{}}
-			infos[md5] = info
-		}
-		if start >= cutoff14 {
-			info.pages[page] = struct{}{}
-			info.days[time.Unix(start, 0).In(loc).Format("2006-01-02")] = struct{}{}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	pace := make(map[string]float64, len(infos))
-	for md5, info := range infos {
-		if len(info.days) == 0 {
-			pace[md5] = 0
-			continue
-		}
-		pace[md5] = float64(len(info.pages)) / float64(len(info.days))
-	}
-	return pace, nil
 }
 
 func (s *Summary) computeDaily(db *sql.DB, loc *time.Location) error {

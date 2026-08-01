@@ -292,9 +292,14 @@ function placeholder(b, cls) {
   return d;
 }
 
+// A book counts as started once it clears 2% AND 2 minutes (percent alone
+// lies: jumping to a late page scores high with seconds of reading). Bare
+// opens stay out of the reading list and timeline but still count in stats.
+function started(b) { return b.finished || (b.percent >= 2 && b.seconds >= 120); }
+
 function renderBooks() {
   const list = $('#book-list'); list.innerHTML = '';
-  const books = SUMMARY.books.filter(b => !b.excluded)
+  const books = SUMMARY.books.filter(b => !b.excluded && started(b))
     .sort((a, b) => b.last_open - a.last_open).slice(0, 12);
   for (const b of books) {
     const row = document.createElement('div'); row.className = 'book-row expandable';
@@ -307,9 +312,8 @@ function renderBooks() {
     const nums = document.createElement('div'); nums.className = 'nums';
     nums.title = 'Total time spent in this book';
     let forecast = '';
-    if (b.forecast_days > 0 && !b.finished) {
-      const nd = Math.round(b.forecast_days);
-      if (nd <= 365) forecast = ` · <span title="Estimated time to finish at your recent pace">~${nd}d left</span>`;
+    if (b.forecast_seconds > 0 && !b.finished) {
+      forecast = ` · <span title="Estimated reading time to finish, at your pace in this book">~${fmtDuration(b.forecast_seconds)} left</span>`;
     }
     nums.innerHTML = `<b>${fmtDuration(b.seconds)}</b> read<br>${b.percent.toFixed(0)}% · ${timeAgo(b.last_open)}${forecast}`;
     const caret = document.createElement('span'); caret.className = 'caret'; caret.textContent = '▸';
@@ -360,8 +364,10 @@ function drawProgressChart(panel, data) {
   const points = data.points;
   const maxPage = data.pages > 0 ? data.pages : Math.max(1, ...points.map(p => p.page));
   const t0 = new Date(points[0].day + 'T00:00:00').getTime();
-  const tNow = Date.now();
-  const span = Math.max(1, tNow - t0);
+  // End the axis at the last activity, not today — otherwise a long-idle or
+  // finished book squeezes into the left edge with dead space after it.
+  const tEnd = new Date(points[points.length - 1].day + 'T00:00:00').getTime();
+  const span = Math.max(86400000, tEnd - t0);
   const accent = css('--accent'), muted = css('--muted'), line = css('--line');
   const xy = p => {
     const t = new Date(p.day + 'T00:00:00').getTime();
@@ -510,7 +516,7 @@ function renderReadingLog() {
     meta.innerHTML = `<div class="title">${esc(b.title || 'Untitled')}</div><div class="sub">${esc(b.authors || '')}</div>`;
     const nums = document.createElement('div'); nums.className = 'nums';
     const days = Math.max(1, Math.ceil((b.finished_at - b.first_read) / 86400));
-    nums.innerHTML = `<b>${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</b><br>took ${days} days · ${fmtDuration(b.seconds)}`;
+    nums.innerHTML = `<b>${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</b><br>took ${days} day${days === 1 ? '' : 's'} · ${fmtDuration(b.seconds)}`;
     row.append(meta, nums);
     el.appendChild(row);
   }
@@ -526,7 +532,7 @@ function renderGantt() {
   const now = Date.now();
   const windowStart = new Date(); windowStart.setMonth(windowStart.getMonth() - 12);
   const wStart = windowStart.getTime(), wEnd = now;
-  let rows = (SUMMARY.books || []).filter(b => !b.excluded && b.first_read > 0).map(b => ({
+  let rows = (SUMMARY.books || []).filter(b => !b.excluded && b.first_read > 0 && started(b)).map(b => ({
     b, start: b.first_read * 1000, end: (b.finished_at || b.last_open || b.first_read) * 1000,
   })).filter(r => r.end >= wStart && r.start <= wEnd);
   rows.sort((a, b) => a.start - b.start);

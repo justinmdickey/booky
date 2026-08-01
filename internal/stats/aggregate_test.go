@@ -89,9 +89,9 @@ func TestFinishedAt(t *testing.T) {
 	}
 }
 
-// TestForecastDays verifies a recently-active unfinished book gets a positive
-// forecast, and a finished book gets 0.
-func TestForecastDays(t *testing.T) {
+// TestForecastSecs verifies a recently-active unfinished book gets a positive
+// reading-time forecast at its own pace, and a finished book gets 0.
+func TestForecastSecs(t *testing.T) {
 	st := testStore(t)
 	now := time.Now().UTC()
 
@@ -125,14 +125,18 @@ func TestForecastDays(t *testing.T) {
 	if active == nil || done == nil {
 		t.Fatalf("missing books: active=%v done=%v", active, done)
 	}
-	if active.ForecastDays <= 0 {
-		t.Errorf("active book forecast_days = %v, want > 0", active.ForecastDays)
+	if active.ForecastSecs <= 0 {
+		t.Errorf("active book forecast_seconds = %v, want > 0", active.ForecastSecs)
+	}
+	// 5 pages in 300s => 60 pph; 195 pages remain => 195/60 h = 11700s.
+	if got, want := active.ForecastSecs, int64(11700); got != want {
+		t.Errorf("active book forecast_seconds = %d, want %d", got, want)
 	}
 	if !done.Finished {
 		t.Fatal("expected md5done to be finished")
 	}
-	if done.ForecastDays != 0 {
-		t.Errorf("finished book forecast_days = %v, want 0", done.ForecastDays)
+	if done.ForecastSecs != 0 {
+		t.Errorf("finished book forecast_seconds = %v, want 0", done.ForecastSecs)
 	}
 }
 
