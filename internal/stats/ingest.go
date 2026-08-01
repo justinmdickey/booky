@@ -47,22 +47,29 @@ func Ingest(st *store.Store, srcPath string, excludePatterns ...string) (books i
 	}
 	defer tx.Rollback()
 
+	// KOReader sometimes carries duplicate book rows for one md5 (re-added
+	// file, metadata rewrite). Ascending last_open makes the most recently
+	// opened row upsert last, so its scalar fields (pages, title) win.
 	bookRows, err := src.Query(`
 SELECT id, IFNULL(title,''), IFNULL(authors,''), IFNULL(series,''), IFNULL(language,''),
        IFNULL(pages,0), IFNULL(last_open,0), IFNULL(highlights,0), IFNULL(notes,0),
        IFNULL(total_read_time,0), IFNULL(total_read_pages,0), IFNULL(md5,'')
-FROM book`)
+FROM book ORDER BY IFNULL(last_open,0)`)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer bookRows.Close()
 
+	// pages: the device's current pagination is authoritative — a font/layout
+	// change legitimately shrinks it, and keeping a historical MAX strands the
+	// book below 100% forever. Only guard against a bogus zero.
 	upBook, err := tx.Prepare(`
 INSERT INTO book(md5,title,authors,series,language,pages,last_open,highlights,notes,total_read_time,total_read_pages,excluded)
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(md5) DO UPDATE SET
   title=excluded.title, authors=excluded.authors, series=excluded.series,
-  language=excluded.language, pages=MAX(book.pages,excluded.pages),
+  language=excluded.language,
+  pages=CASE WHEN excluded.pages>0 THEN excluded.pages ELSE book.pages END,
   last_open=MAX(book.last_open,excluded.last_open),
   highlights=MAX(book.highlights,excluded.highlights),
   notes=MAX(book.notes,excluded.notes),

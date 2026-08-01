@@ -224,3 +224,94 @@ func TestIngestAndCompute(t *testing.T) {
 		t.Errorf("heatmap should be 365 days, got %d", len(sum.Heatmap))
 	}
 }
+
+// TestIngestRepaginationShrinksPages verifies the device's current page count
+// wins on re-ingest — a font/layout change that shrinks pagination must not be
+// overridden by a historical maximum, or a finished book reads as <100%
+// forever. A zero page count is still ignored as bogus.
+func TestIngestRepaginationShrinksPages(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "booky.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	mk := func(name string, pages int) string {
+		path := filepath.Join(dir, name)
+		db, err := sql.Open("sqlite", "file:"+path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		db.Exec(`CREATE TABLE book (id INTEGER PRIMARY KEY, title TEXT, authors TEXT, notes INTEGER,
+  last_open INTEGER, highlights INTEGER, pages INTEGER, series TEXT, language TEXT,
+  md5 TEXT, total_read_time INTEGER, total_read_pages INTEGER);
+CREATE TABLE page_stat_data (id_book INTEGER, page INTEGER, start_time INTEGER,
+  duration INTEGER, total_pages INTEGER, UNIQUE(id_book,page,start_time));`)
+		db.Exec(`INSERT INTO book VALUES (1,'HHG','Douglas Adams',0,?,0,?,'','eng','md5hhg',0,0)`,
+			time.Now().Unix(), pages)
+		db.Exec(`INSERT INTO page_stat_data VALUES (1,1,?,55,?)`, time.Now().Unix(), pages)
+		return path
+	}
+
+	pagesNow := func() (n int64) {
+		st.DB().QueryRow(`SELECT pages FROM book WHERE md5='md5hhg'`).Scan(&n)
+		return
+	}
+
+	if _, _, err := Ingest(st, mk("stats-779.sqlite3", 779)); err != nil {
+		t.Fatalf("ingest 779: %v", err)
+	}
+	if _, _, err := Ingest(st, mk("stats-461.sqlite3", 461)); err != nil {
+		t.Fatalf("ingest 461: %v", err)
+	}
+	if got := pagesNow(); got != 461 {
+		t.Errorf("pages after shrink = %d, want 461 (device is authoritative)", got)
+	}
+	if _, _, err := Ingest(st, mk("stats-0.sqlite3", 0)); err != nil {
+		t.Fatalf("ingest 0: %v", err)
+	}
+	if got := pagesNow(); got != 461 {
+		t.Errorf("pages after zero upload = %d, want 461 (zero is bogus)", got)
+	}
+}
+
+// TestIngestDuplicateBookRowsNewestWins: KOReader can carry two book rows for
+// one md5; the most recently opened row's pagination must win, not whichever
+// happens to iterate last.
+func TestIngestDuplicateBookRowsNewestWins(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "booky.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	path := filepath.Join(dir, "stats.sqlite3")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`CREATE TABLE book (id INTEGER PRIMARY KEY, title TEXT, authors TEXT, notes INTEGER,
+  last_open INTEGER, highlights INTEGER, pages INTEGER, series TEXT, language TEXT,
+  md5 TEXT, total_read_time INTEGER, total_read_pages INTEGER);
+CREATE TABLE page_stat_data (id_book INTEGER, page INTEGER, start_time INTEGER,
+  duration INTEGER, total_pages INTEGER, UNIQUE(id_book,page,start_time));`)
+	now := time.Now().Unix()
+	// Stale duplicate (bigger pages, older last_open) deliberately has the
+	// HIGHER id so naive id-order iteration would let it win.
+	db.Exec(`INSERT INTO book VALUES (1,'MC','C.S. Lewis',0,?,0,461,'','eng','md5mc',0,0)`, now)
+	db.Exec(`INSERT INTO book VALUES (2,'MC','C.S. Lewis',0,?,0,999,'','eng','md5mc',0,0)`, now-86400)
+	db.Exec(`INSERT INTO page_stat_data VALUES (1,1,?,55,461)`, now)
+	db.Close()
+
+	if _, _, err := Ingest(st, path); err != nil {
+		t.Fatal(err)
+	}
+	var pages int64
+	st.DB().QueryRow(`SELECT pages FROM book WHERE md5='md5mc'`).Scan(&pages)
+	if pages != 461 {
+		t.Errorf("pages = %d, want 461 (newest last_open row wins)", pages)
+	}
+}
