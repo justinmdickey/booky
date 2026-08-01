@@ -6,9 +6,10 @@ import (
 	"time"
 )
 
-// TestProgress verifies Progress returns ascending, monotonic cumulative
-// pages and correct per-day seconds, including a day where the max page read
-// dips below a previous day's (the running total must not drop).
+// TestProgress verifies Progress returns each day's closing position (the
+// page of the day's LAST event, not its max) and correct per-day seconds —
+// so a peek at the back of the book doesn't pin the curve to the top, and an
+// honest flip-back shows as a dip.
 func TestProgress(t *testing.T) {
 	st := testStore(t)
 	testBook(t, st, "md5prog", "Progress Book", 100)
@@ -20,11 +21,12 @@ func TestProgress(t *testing.T) {
 	// Day 1: reads up to page 10, 120s total.
 	testPage(t, st, "md5prog", 5, day1.Unix(), 60)
 	testPage(t, st, "md5prog", 10, day1.Unix()+60, 60)
-	// Day 2: re-reads page 3 (e.g. flipped back) — max page for the day is
-	// lower than day 1's cumulative high, so the running total must hold.
+	// Day 2: flips back to page 3 — the day closes there, an honest dip.
 	testPage(t, st, "md5prog", 3, day2.Unix(), 30)
-	// Day 3: advances past day 1's high point.
-	testPage(t, st, "md5prog", 15, day3.Unix(), 45)
+	// Day 3: peeks at page 90 (the back of the book), then settles at 15 —
+	// the closing position must be 15, not the peek.
+	testPage(t, st, "md5prog", 90, day3.Unix(), 5)
+	testPage(t, st, "md5prog", 15, day3.Unix()+60, 45)
 
 	bp, err := Progress(st, "md5prog", time.UTC)
 	if err != nil {
@@ -39,19 +41,13 @@ func TestProgress(t *testing.T) {
 
 	want := []ProgressPoint{
 		{Day: "2024-01-01", Page: 10, Seconds: 120},
-		{Day: "2024-01-02", Page: 10, Seconds: 30}, // running max holds, doesn't drop to 3
-		{Day: "2024-01-03", Page: 15, Seconds: 45},
+		{Day: "2024-01-02", Page: 3, Seconds: 30}, // honest dip: day closed on page 3
+		{Day: "2024-01-03", Page: 15, Seconds: 50}, // closing position, not the page-90 peek
 	}
 	for i, w := range want {
 		got := bp.Points[i]
 		if got != w {
 			t.Errorf("point %d = %+v, want %+v", i, got, w)
-		}
-	}
-	// Monotonic non-decreasing across the whole series.
-	for i := 1; i < len(bp.Points); i++ {
-		if bp.Points[i].Page < bp.Points[i-1].Page {
-			t.Errorf("page dropped at index %d: %d -> %d", i, bp.Points[i-1].Page, bp.Points[i].Page)
 		}
 	}
 }

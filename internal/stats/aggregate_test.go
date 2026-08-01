@@ -238,3 +238,50 @@ func TestMonthlyRollup(t *testing.T) {
 		t.Errorf("first monthly entry = %s, want first month with data %s", sum.Monthly[0].Month, finKey)
 	}
 }
+
+// TestPercentIsPosition: a brief peek deep into a book (one event at page
+// 3137 of 3695) must not set progress — percent tracks the newest event's
+// position. Finishing still keys off the furthest page ever reached, and a
+// finished book pins to 100 even after flipping back.
+func TestPercentIsPosition(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+
+	testBook(t, st, "md5omni", "Omnibus", 3695)
+	testPage(t, st, "md5omni", 3137, now.AddDate(0, 0, -10).Unix(), 57) // the peek
+	testPage(t, st, "md5omni", 285, now.AddDate(0, 0, -1).Unix(), 60)
+	testPage(t, st, "md5omni", 286, now.AddDate(0, 0, -1).Unix()+60, 60) // position
+
+	testBook(t, st, "md5rr", "Reread", 100)
+	testPage(t, st, "md5rr", 99, now.AddDate(0, 0, -5).Unix(), 60) // finished
+	testPage(t, st, "md5rr", 12, now.Unix(), 60)                   // flipped back
+
+	sum, err := Compute(st, time.UTC)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	for i := range sum.Books {
+		b := sum.Books[i]
+		switch b.MD5 {
+		case "md5omni":
+			if want := float64(286) / 3695 * 100; b.Percent < want-0.1 || b.Percent > want+0.1 {
+				t.Errorf("omnibus percent = %.2f, want ~%.2f (position 286)", b.Percent, want)
+			}
+			if b.Finished {
+				t.Error("omnibus must not be finished from a peek short of the last page")
+			}
+			// Forecast counts from position, not the peek: ~3409 pages remain.
+			if b.ForecastSecs <= 0 {
+				t.Errorf("omnibus forecast_seconds = %d, want > 0", b.ForecastSecs)
+			}
+			wantSecs := int64(float64(3695-286) / b.PagesPerHour * 3600)
+			if b.ForecastSecs != wantSecs {
+				t.Errorf("omnibus forecast_seconds = %d, want %d", b.ForecastSecs, wantSecs)
+			}
+		case "md5rr":
+			if !b.Finished || b.Percent != 100 {
+				t.Errorf("reread: finished=%v percent=%.1f, want finished at 100", b.Finished, b.Percent)
+			}
+		}
+	}
+}

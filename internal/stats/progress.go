@@ -21,12 +21,12 @@ type BookProgress struct {
 	Points []ProgressPoint `json:"points"`
 }
 
-// ProgressPoint is one day of activity on a book. Page is a running
-// (monotonic, non-decreasing) furthest-page-reached value, not just that
-// day's max — mirrors the "furthest page reached" logic in Compute.
+// ProgressPoint is one day of activity on a book. Page is the day's closing
+// position (page of the last event that day) — mirrors position-based
+// Percent in Compute, and dips are honest (re-reading an earlier section).
 type ProgressPoint struct {
 	Day     string `json:"day"`     // YYYY-MM-DD local
-	Page    int64  `json:"page"`    // cumulative furthest page up to and including this day
+	Page    int64  `json:"page"`    // position at the end of this day
 	Seconds int64  `json:"seconds"` // seconds read that day
 }
 
@@ -54,9 +54,13 @@ func Progress(st *store.Store, md5 string, loc *time.Location) (BookProgress, er
 	}
 	defer rows.Close()
 
+	// Each day's Page is the closing position — the page of that day's last
+	// event — not a running max, so a brief peek at the back of the book
+	// doesn't flatline the whole curve at the top.
 	type agg struct {
-		secs    int64
-		maxPage int64
+		secs     int64
+		lastSeen int64
+		page     int64
 	}
 	days := map[string]*agg{}
 	for rows.Next() {
@@ -71,8 +75,8 @@ func Progress(st *store.Store, md5 string, loc *time.Location) (BookProgress, er
 			days[key] = a
 		}
 		a.secs += dur
-		if page > a.maxPage {
-			a.maxPage = page
+		if start > a.lastSeen || (start == a.lastSeen && page > a.page) {
+			a.lastSeen, a.page = start, page
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -85,13 +89,9 @@ func Progress(st *store.Store, md5 string, loc *time.Location) (BookProgress, er
 	}
 	sort.Strings(keys)
 
-	var running int64
 	for _, k := range keys {
 		a := days[k]
-		if a.maxPage > running {
-			running = a.maxPage
-		}
-		bp.Points = append(bp.Points, ProgressPoint{Day: k, Page: running, Seconds: a.secs})
+		bp.Points = append(bp.Points, ProgressPoint{Day: k, Page: a.page, Seconds: a.secs})
 	}
 	return bp, nil
 }

@@ -97,7 +97,9 @@ SELECT b.md5, b.title, b.authors, b.series, b.pages, b.highlights, b.last_open, 
        COUNT(DISTINCT p.page)            AS pages_read,
        IFNULL(MAX(p.page),0)             AS max_page,
        IFNULL(MIN(p.start_time),0)       AS first_read,
-       IFNULL(MAX(p.start_time),0)       AS last_read
+       IFNULL(MAX(p.start_time),0)       AS last_read,
+       IFNULL((SELECT q.page FROM page_stat q WHERE q.md5 = b.md5
+               ORDER BY q.start_time DESC, q.page DESC LIMIT 1),0) AS position
 FROM book b LEFT JOIN page_stat p ON p.md5 = b.md5
 GROUP BY b.md5
 ORDER BY secs DESC`)
@@ -107,37 +109,38 @@ ORDER BY secs DESC`)
 	defer rows.Close()
 	for rows.Next() {
 		var b BookStat
-		var maxPage, lastRead int64
+		var maxPage, lastRead, position int64
 		if err := rows.Scan(&b.MD5, &b.Title, &b.Authors, &b.Series, &b.Pages,
-			&b.Highlights, &b.LastOpen, &b.Excluded, &b.Seconds, &b.PagesRead, &maxPage, &b.FirstRead, &lastRead); err != nil {
+			&b.Highlights, &b.LastOpen, &b.Excluded, &b.Seconds, &b.PagesRead, &maxPage, &b.FirstRead, &lastRead, &position); err != nil {
 			return s, err
 		}
-		// "Read this far" is the furthest page reached, not the count of distinct
-		// pages logged. When a book is re-paginated across file versions (a
-		// metadata rewrite, a font/reflow change), the same content gets logged
-		// under different page numbers, so DISTINCT undercounts. Reaching the
-		// last page is the honest signal that the book was read through.
+		// Finishing is "the furthest page ever reached hit the last page" — a
+		// deliberate jump to the end counts (that's how KOReader marks done).
+		// Progress percent is NOT that: a 57-second peek at an omnibus's
+		// appendix must not read as 85%. Percent tracks position — the page of
+		// the newest event — which also self-heals across re-paginations,
+		// since the newest event is always in the current layout.
 		reached := maxPage
 		if b.PagesRead > reached {
 			reached = b.PagesRead
 		}
+		b.Finished = b.Pages > 0 && reached >= b.Pages-1 // allow off-by-one
 		if b.Pages > 0 {
-			b.Percent = float64(reached) / float64(b.Pages) * 100
-			if b.Percent > 100 {
+			b.Percent = float64(position) / float64(b.Pages) * 100
+			if b.Finished || b.Percent > 100 {
 				b.Percent = 100
 			}
 		}
 		if b.Seconds > 0 {
 			b.PagesPerHour = float64(b.PagesRead) * 3600.0 / float64(b.Seconds)
 		}
-		b.Finished = b.Pages > 0 && reached >= b.Pages-1 // allow off-by-one
 		if b.Finished {
 			b.FinishedAt = finishedAt[b.MD5]
 		} else if !b.Excluded && b.Pages > 0 && b.PagesPerHour > 0 &&
 			(b.LastOpen >= active30 || lastRead >= active30) {
 			// Reading time left at this book's own pace — an amount of reading,
 			// not a calendar guess. Only for books touched in the last 30 days.
-			remaining := b.Pages - reached
+			remaining := b.Pages - position
 			b.ForecastSecs = int64(float64(remaining) / b.PagesPerHour * 3600)
 		}
 		if !b.Excluded {
