@@ -116,6 +116,16 @@ canvas { width: 100%; display: block; height: 140px; }
 .heatmap .cell[data-l="3"] { background: var(--heat-3); }
 .heatmap .cell[data-l="4"] { background: var(--heat-4); }
 
+/* ---- punchcard (reading rhythm) ---- */
+.punchcard { display: grid; grid-template-columns: minmax(24px, 2.6em) repeat(24, 1fr); gap: 2px; }
+.punchcard .wd { font-size: .68rem; color: var(--muted); display: flex; align-items: center; justify-content: flex-end; padding-right: .35rem; }
+.punchcard .cell { aspect-ratio: 1; border-radius: 2px; background: var(--heat-0); min-width: 0; }
+.punchcard .cell[data-l="1"] { background: var(--heat-1); }
+.punchcard .cell[data-l="2"] { background: var(--heat-2); }
+.punchcard .cell[data-l="3"] { background: var(--heat-3); }
+.punchcard .cell[data-l="4"] { background: var(--heat-4); }
+.punchcard-hours { margin-left: 2.6em; display: flex; justify-content: space-between; font-size: .68rem; color: var(--muted); margin-top: .35rem; }
+
 .book-list { display: flex; flex-direction: column; gap: .7rem; }
 .book-row { display: flex; gap: .9rem; align-items: center; }
 .book-row .cover { width: 44px; height: 64px; border-radius: 5px; object-fit: cover;
@@ -131,12 +141,30 @@ canvas { width: 100%; display: block; height: 140px; }
 .badge { display: inline-block; font-size: .68rem; background: var(--accent-soft); color: var(--accent);
   padding: .1rem .4rem; border-radius: 6px; font-weight: 700; vertical-align: middle; }
 
+.book-row.expandable { cursor: pointer; border-radius: 10px; padding: .3rem; margin: -.3rem; }
+.book-row.expandable:hover { background: var(--surface-2); }
+.book-row .caret { flex: none; color: var(--muted); font-size: .72rem; margin-left: .2rem; transition: transform .15s; }
+.book-row.expandable.open .caret { transform: rotate(90deg); }
+.progress-panel { padding: .5rem .2rem .3rem 3.5rem; }
+.progress-panel .progress-canvas { height: 110px; }
+.progress-panel .progress-labels { display: flex; justify-content: space-between; font-size: .72rem; margin-top: .1rem; }
+
 .session-list { display: flex; flex-direction: column; }
 .session-row { display: flex; justify-content: space-between; gap: .6rem; padding: .5rem 0; border-bottom: 1px solid var(--line); font-size: .9rem; }
 .session-row:last-child { border-bottom: 0; }
 .session-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-row > span:last-child { white-space: nowrap; flex: none; }
 .session-row .when { color: var(--muted); }
+
+/* ---- journal ---- */
+.journal-head { margin-bottom: 1.1rem; }
+.journal-stats { grid-template-columns: repeat(3, 1fr); }
+.reading-log .log-month { font-weight: 650; font-size: .8rem; text-transform: uppercase; letter-spacing: .03em;
+  margin: 1rem 0 .5rem; }
+.reading-log .log-month:first-child { margin-top: 0; }
+.reading-log .log-row { margin-bottom: .7rem; }
+.reading-log .log-row:last-child { margin-bottom: 0; }
+#chart-gantt { height: auto; }
 
 .collection-list { display: flex; flex-direction: column; gap: 1rem; }
 .collection { border: 1px solid var(--line); border-radius: var(--radius); padding: .9rem; }
@@ -279,4 +307,8 @@ input[type=search] { border: 1px solid var(--line); background: var(--surface); 
   main { padding: .8rem; }
   .card { padding: 1rem .9rem; }
   .stat-grid, .two-col { gap: .7rem; }
+}
+@media (max-width: 360px) {
+  .tabs { gap: .1rem; }
+  .tab { padding: .3rem .45rem; font-size: .78rem; }
 }

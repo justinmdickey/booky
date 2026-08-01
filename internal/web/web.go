@@ -4,6 +4,7 @@ package web
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -71,6 +72,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/library", s.auth.RequireJSON(s.apiLibrary))
 	mux.HandleFunc("POST /api/books/{md5}/excluded", s.auth.RequireJSON(s.apiBookExcluded))
 	mux.HandleFunc("POST /api/books/excluded", s.auth.RequireJSON(s.apiBooksExcluded))
+	mux.HandleFunc("GET /api/books/{md5}/progress", s.auth.RequireJSON(s.apiBookProgress))
 
 	// Sync manifest: the companion plugin pulls this to bulk-download the whole
 	// library to the Kobo, skipping what it already has.
@@ -265,6 +267,21 @@ func (s *Server) apiBooksExcluded(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "changed": changed})
+}
+
+// apiBookProgress returns per-day reading progress for a single book, used by
+// the book detail view.
+func (s *Server) apiBookProgress(w http.ResponseWriter, r *http.Request) {
+	bp, err := stats.Progress(s.st, r.PathValue("md5"), s.loc)
+	if err != nil {
+		if errors.Is(err, stats.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown book"})
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, bp)
 }
 
 func (s *Server) apiCollections(w http.ResponseWriter, r *http.Request) {

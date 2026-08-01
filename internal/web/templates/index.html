@@ -12,6 +12,7 @@
   <div class="brand">📚 <span>Booky</span></div>
   <nav class="tabs">
     <button class="tab active" data-tab="dash">Dashboard</button>
+    <button class="tab" data-tab="journal">Journal</button>
     {{if .HasLibrary}}<button class="tab" data-tab="curate">Curate</button>{{end}}
     <button class="tab" data-tab="books">Books</button>
   </nav>
@@ -57,15 +58,10 @@
         <div id="heatmap" class="heatmap"></div>
       </div>
 
-      <div class="two-col">
-        <div class="card">
-          <h3>When you read</h3>
-          <canvas id="chart-hourly"></canvas>
-        </div>
-        <div class="card">
-          <h3>By weekday</h3>
-          <canvas id="chart-weekday"></canvas>
-        </div>
+      <div class="card">
+        <div class="card-head"><h3>Reading rhythm</h3></div>
+        <div id="punchcard" class="punchcard"></div>
+        <div id="punchcard-hours" class="punchcard-hours"></div>
       </div>
 
       <div class="card">
@@ -80,6 +76,35 @@
         <h3>Recent sessions</h3>
         <div id="session-list" class="session-list"></div>
       </div>
+    </div>
+  </section>
+
+  <!-- JOURNAL -->
+  <section id="tab-journal" class="tabpane">
+    <div class="card-head journal-head">
+      <h3>Journal</h3>
+      <div class="seg" id="year-seg"></div>
+    </div>
+
+    <div class="stat-grid journal-stats">
+      <div class="card stat"><div class="big" id="j-books">–</div><div class="lbl">books finished</div></div>
+      <div class="card stat"><div class="big" id="j-hours">–</div><div class="lbl">hours read</div></div>
+      <div class="card stat"><div class="big" id="j-pages">–</div><div class="lbl">pages read</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Hours by month</h3></div>
+      <canvas id="chart-monthly"></canvas>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3 id="log-head">Finished books</h3></div>
+      <div id="reading-log" class="reading-log"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Reading timeline</h3><span class="muted" id="gantt-note"></span></div>
+      <canvas id="chart-gantt"></canvas>
     </div>
   </section>
 

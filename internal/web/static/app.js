@@ -35,6 +35,7 @@ $$('.tab').forEach(t => t.onclick = () => {
   $('#tab-' + t.dataset.tab).classList.add('active');
   if (t.dataset.tab === 'books') loadLibraryGrid();
   if (t.dataset.tab === 'curate') loadCollections();
+  if (t.dataset.tab === 'journal') renderJournal();
 });
 
 // ---- theme ----
@@ -65,7 +66,11 @@ $('#theme-toggle').onclick = () => {
   document.documentElement.dataset.theme = next;
   localStorage.theme = next;
   reflectTheme();
-  if (SUMMARY) renderCharts();
+  if (SUMMARY) {
+    renderCharts();
+    if ($('#tab-journal').classList.contains('active')) renderJournalCharts();
+    renderOpenPanels();
+  }
 };
 if (localStorage.theme) document.documentElement.dataset.theme = localStorage.theme;
 reflectTheme();
@@ -161,11 +166,14 @@ function attachBarHover(canvas, bars, labels, values, fmt) {
   bindTipDismiss();
 }
 
-function attachCellHover(el) {
+// fmt(cell) => tip html, defaults to the heatmap's day/seconds/pages format.
+function attachCellHover(el, fmt) {
   const at = (target, cx, cy) => {
     const c = target.closest && target.closest('.cell');
-    if (!c || !c.dataset.day) { hideTip(); return; }
-    showTip(`${c.dataset.day}: ${fmtDuration(+c.dataset.sec)}, ${fmtNum(+c.dataset.pages)} pages`, cx, cy);
+    if (!c) { hideTip(); return; }
+    const html = fmt ? fmt(c) : (c.dataset.day ? `${c.dataset.day}: ${fmtDuration(+c.dataset.sec)}, ${fmtNum(+c.dataset.pages)} pages` : null);
+    if (!html) { hideTip(); return; }
+    showTip(html, cx, cy);
   };
   el.onmousemove = e => at(e.target, e.clientX, e.clientY);
   el.onclick = e => at(e.target, e.clientX, e.clientY);
@@ -192,6 +200,7 @@ async function loadDash() {
   $('#s-week').textContent = fmtDuration(SUMMARY.this_week_seconds);
 
   renderHeatmap();
+  renderPunchcard();
   renderBooks();
   renderSessions();
   renderCharts();
@@ -205,27 +214,32 @@ function renderCharts() {
     labelEvery: Math.ceil(daily.length / 8),
     tooltip: (i) => `${daily[i].day}: ${fmtDuration(daily[i].seconds)}, ${fmtNum(daily[i].pages)} pages`,
   });
+}
 
-  const hourlyRaw = SUMMARY.hourly || [];
-  const hourly = hourlyRaw.map(s => Math.round(s / 60));
-  const hourLabels = [...Array(24)].map((_, i) => i);
-  barChart($('#chart-hourly'), hourLabels, hourly, {
-    labelEvery: 4,
-    tooltip: (i) => {
-      const h = +hourLabels[i];
-      const ampm = h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`;
-      return `${ampm}: ${fmtDuration(hourlyRaw[i])}`;
-    },
-  });
+function ampmLabel(h) { return h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`; }
 
-  const wdNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const wd = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
-  const weekdayRaw = SUMMARY.weekday || [];
-  const weekday = weekdayRaw.map(s => Math.round(s / 60));
-  barChart($('#chart-weekday'), wd, weekday, {
-    labelEvery: 1,
-    tooltip: (i) => `${wdNames[i]}: ${fmtDuration(weekdayRaw[i])}`,
-  });
+function renderPunchcard() {
+  const el = $('#punchcard'); el.innerHTML = '';
+  const wdNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const data = SUMMARY.punchcard || [];
+  // Cells aggregate a year, so scale levels to the busiest cell — the daily
+  // heatLevel() thresholds would saturate every regular slot at max.
+  const max = Math.max(1, ...data.map(row => Math.max(...row)));
+  for (let d = 0; d < 7; d++) {
+    const wd = document.createElement('div'); wd.className = 'wd'; wd.textContent = wdNames[d];
+    el.appendChild(wd);
+    for (let hr = 0; hr < 24; hr++) {
+      const sec = (data[d] && data[d][hr]) || 0;
+      const c = document.createElement('div'); c.className = 'cell';
+      c.dataset.l = sec ? Math.max(1, Math.ceil(4 * sec / max)) : 0;
+      c.dataset.wd = wdNames[d]; c.dataset.hr = hr; c.dataset.sec = sec;
+      el.appendChild(c);
+    }
+  }
+  attachCellHover(el, c => `${c.dataset.wd} ${ampmLabel(+c.dataset.hr)}: ${fmtDuration(+c.dataset.sec)}`);
+
+  const hours = $('#punchcard-hours'); hours.innerHTML = '';
+  [0, 6, 12, 18].forEach(h => { const s = document.createElement('span'); s.textContent = ampmLabel(h); hours.appendChild(s); });
 }
 
 function heatLevel(sec) {
@@ -283,7 +297,7 @@ function renderBooks() {
   const books = SUMMARY.books.filter(b => !b.excluded)
     .sort((a, b) => b.last_open - a.last_open).slice(0, 12);
   for (const b of books) {
-    const row = document.createElement('div'); row.className = 'book-row';
+    const row = document.createElement('div'); row.className = 'book-row expandable';
     row.appendChild(coverEl(b, 'cover'));
     const meta = document.createElement('div'); meta.className = 'meta';
     const fin = b.finished ? ' <span class="badge">DONE</span>' : '';
@@ -292,10 +306,101 @@ function renderBooks() {
       <div class="progress"><i style="width:${Math.min(100, b.percent).toFixed(0)}%"></i></div>`;
     const nums = document.createElement('div'); nums.className = 'nums';
     nums.title = 'Total time spent in this book';
-    nums.innerHTML = `<b>${fmtDuration(b.seconds)}</b> read<br>${b.percent.toFixed(0)}% · ${timeAgo(b.last_open)}`;
-    row.append(meta, nums);
-    list.appendChild(row);
+    let forecast = '';
+    if (b.forecast_days > 0 && !b.finished) {
+      const nd = Math.round(b.forecast_days);
+      if (nd <= 365) forecast = ` · <span title="Estimated time to finish at your recent pace">~${nd}d left</span>`;
+    }
+    nums.innerHTML = `<b>${fmtDuration(b.seconds)}</b> read<br>${b.percent.toFixed(0)}% · ${timeAgo(b.last_open)}${forecast}`;
+    const caret = document.createElement('span'); caret.className = 'caret'; caret.textContent = '▸';
+    row.append(meta, nums, caret);
+    const panel = document.createElement('div'); panel.className = 'progress-panel hidden';
+    row.onclick = () => toggleProgressPanel(b, row, panel);
+    list.append(row, panel);
   }
+}
+
+// ---- book progress expand ----
+const progressCache = new Map(); // md5 -> {pages, points} | null (unavailable)
+function toggleProgressPanel(b, row, panel) {
+  const opening = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden');
+  row.classList.toggle('open', opening);
+  if (opening) drawProgressPanel(b, panel);
+}
+async function drawProgressPanel(b, panel) {
+  let data = progressCache.get(b.md5);
+  if (data === undefined) {
+    panel.innerHTML = '<p class="muted">Loading…</p>';
+    try {
+      const r = await api(`/api/books/${b.md5}/progress`);
+      data = { pages: r.pages, points: r.points || [] };
+    } catch (e) { data = { pages: 0, points: [] }; }
+    progressCache.set(b.md5, data);
+  }
+  panel.dataset.md5 = b.md5;
+  if (data.points.length < 2) { panel.innerHTML = '<p class="muted">Not enough data yet.</p>'; return; }
+  panel.innerHTML = `<canvas class="progress-canvas"></canvas>
+    <div class="progress-labels"><span class="first muted"></span><span class="last muted"></span></div>`;
+  drawProgressChart(panel, data);
+}
+function renderOpenPanels() {
+  $$('.progress-panel:not(.hidden)').forEach(panel => {
+    const data = progressCache.get(panel.dataset.md5);
+    if (data && data.points.length >= 2) drawProgressChart(panel, data);
+  });
+}
+function fmtShortDate(dayStr) { return new Date(dayStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+function drawProgressChart(panel, data) {
+  const canvas = $('.progress-canvas', panel);
+  if (!canvas) return;
+  const { ctx, w, h } = prep(canvas);
+  ctx.clearRect(0, 0, w, h);
+  const pad = { l: 4, r: 4, t: 10, b: 6 };
+  const points = data.points;
+  const maxPage = data.pages > 0 ? data.pages : Math.max(1, ...points.map(p => p.page));
+  const t0 = new Date(points[0].day + 'T00:00:00').getTime();
+  const tNow = Date.now();
+  const span = Math.max(1, tNow - t0);
+  const accent = css('--accent'), muted = css('--muted'), line = css('--line');
+  const xy = p => {
+    const t = new Date(p.day + 'T00:00:00').getTime();
+    const x = pad.l + (w - pad.l - pad.r) * (t - t0) / span;
+    const y = pad.t + (h - pad.t - pad.b) * (1 - Math.min(1, p.page / maxPage));
+    return [x, y];
+  };
+  ctx.strokeStyle = line; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad.l, h - pad.b); ctx.lineTo(w - pad.r, h - pad.b); ctx.stroke();
+
+  ctx.beginPath();
+  points.forEach((p, i) => { const [x, y] = xy(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+  const [lx] = xy(points[points.length - 1]), [fx] = xy(points[0]);
+  ctx.lineTo(lx, h - pad.b); ctx.lineTo(fx, h - pad.b); ctx.closePath();
+  ctx.globalAlpha = .12; ctx.fillStyle = accent; ctx.fill(); ctx.globalAlpha = 1;
+
+  ctx.fillStyle = muted; ctx.font = '10px system-ui'; ctx.textAlign = 'right';
+  ctx.fillText(fmtNum(maxPage), w - pad.r, pad.t + 8);
+
+  const firstLbl = $('.progress-labels .first', panel), lastLbl = $('.progress-labels .last', panel);
+  if (firstLbl) firstLbl.textContent = fmtShortDate(points[0].day);
+  if (lastLbl) lastLbl.textContent = fmtShortDate(points[points.length - 1].day);
+
+  attachProgressHover(canvas, points, xy, maxPage);
+}
+function attachProgressHover(canvas, points, xy, maxPage) {
+  const at = (cx, cy) => {
+    const x = cx - canvas.getBoundingClientRect().left;
+    let best = 0, bestDist = Infinity;
+    points.forEach((p, i) => { const [px] = xy(p); const d = Math.abs(px - x); if (d < bestDist) { bestDist = d; best = i; } });
+    const p = points[best];
+    const pct = maxPage ? Math.round(100 * p.page / maxPage) : 0;
+    showTip(`${fmtShortDate(p.day)}: page ${fmtNum(p.page)} (${pct}%) · ${fmtDuration(p.seconds)} read that day`, cx, cy);
+  };
+  canvas.onmousemove = e => at(e.clientX, e.clientY);
+  canvas.onclick = e => at(e.clientX, e.clientY);
+  canvas.onmouseleave = hideTip;
+  bindTipDismiss();
 }
 
 function renderSessions() {
@@ -312,6 +417,195 @@ $$('#range-seg button').forEach(b => b.onclick = () => {
   $$('#range-seg button').forEach(x => x.classList.remove('active'));
   b.classList.add('active'); rangeDays = +b.dataset.days; renderCharts();
 });
+
+// ---- journal ----
+let journalYear = null;
+function fmtMonthShort(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const mon = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'short' });
+  return m === 1 ? `${mon} ${('' + y).slice(2)}` : mon;
+}
+function fmtMonthFull(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+}
+function journalYears() {
+  const years = new Set();
+  for (const m of (SUMMARY.monthly || [])) {
+    if (m.seconds > 0 || m.pages > 0 || m.books_finished > 0) years.add(+m.month.slice(0, 4));
+  }
+  for (const b of SUMMARY.books) {
+    if (!b.excluded && b.finished_at) years.add(new Date(b.finished_at * 1000).getFullYear());
+  }
+  return [...years].sort((a, b) => b - a);
+}
+async function renderJournal() {
+  if (!SUMMARY) { await loadDash(); }
+  if (!SUMMARY || !(SUMMARY.books || []).length) return;
+  renderYearSeg();
+  renderJournalStats();
+  renderReadingLog();
+  renderJournalCharts();
+}
+function renderJournalCharts() {
+  renderMonthlyChart();
+  renderGantt();
+}
+function renderYearSeg() {
+  const years = journalYears();
+  const curYear = new Date().getFullYear();
+  if (journalYear === null) journalYear = years.includes(curYear) ? curYear : 'all';
+  const seg = $('#year-seg'); seg.innerHTML = '';
+  const mk = (val, label) => {
+    const btn = document.createElement('button');
+    btn.textContent = label; btn.classList.toggle('active', journalYear === val);
+    btn.onclick = () => { journalYear = val; renderYearSeg(); renderJournalStats(); renderReadingLog(); };
+    return btn;
+  };
+  years.forEach(y => seg.appendChild(mk(y, '' + y)));
+  seg.appendChild(mk('all', 'All'));
+}
+function renderJournalStats() {
+  const monthly = SUMMARY.monthly || [];
+  const inYear = m => journalYear === 'all' || +m.month.slice(0, 4) === journalYear;
+  let seconds = 0, pages = 0;
+  for (const m of monthly) if (inYear(m)) { seconds += m.seconds; pages += m.pages; }
+  const booksFinished = SUMMARY.books.filter(b => !b.excluded && b.finished_at &&
+    (journalYear === 'all' || new Date(b.finished_at * 1000).getFullYear() === journalYear)).length;
+  $('#j-books').textContent = booksFinished;
+  $('#j-hours').textContent = fmtDuration(seconds);
+  $('#j-pages').textContent = fmtNum(pages);
+}
+function renderMonthlyChart() {
+  const all = SUMMARY.monthly || [];
+  const monthly = all.length > 36 ? all.slice(-36) : all;
+  const mins = monthly.map(m => Math.round(m.seconds / 60));
+  const labels = monthly.map(m => fmtMonthShort(m.month));
+  barChart($('#chart-monthly'), labels, mins, {
+    labelEvery: Math.max(1, Math.ceil(monthly.length / 8)),
+    tooltip: (i) => `${fmtMonthFull(monthly[i].month)}: ${fmtDuration(monthly[i].seconds)}, ${fmtNum(monthly[i].pages)} pages`,
+  });
+}
+function renderReadingLog() {
+  const el = $('#reading-log'); el.innerHTML = '';
+  const books = SUMMARY.books.filter(b => !b.excluded && b.finished_at > 0 &&
+    (journalYear === 'all' || new Date(b.finished_at * 1000).getFullYear() === journalYear))
+    .sort((a, b) => b.finished_at - a.finished_at);
+  if (!books.length) {
+    el.innerHTML = `<p class="muted">No books finished ${journalYear === 'all' ? '' : 'in ' + journalYear + ' '}yet.</p>`;
+    return;
+  }
+  let curMonth = null;
+  for (const b of books) {
+    const d = new Date(b.finished_at * 1000);
+    const monthKey = d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    if (monthKey !== curMonth) {
+      curMonth = monthKey;
+      const h = document.createElement('div'); h.className = 'log-month muted'; h.textContent = monthKey;
+      el.appendChild(h);
+    }
+    const row = document.createElement('div'); row.className = 'book-row log-row';
+    row.appendChild(coverEl(b, 'cover'));
+    const meta = document.createElement('div'); meta.className = 'meta';
+    meta.innerHTML = `<div class="title">${esc(b.title || 'Untitled')}</div><div class="sub">${esc(b.authors || '')}</div>`;
+    const nums = document.createElement('div'); nums.className = 'nums';
+    const days = Math.max(1, Math.ceil((b.finished_at - b.first_read) / 86400));
+    nums.innerHTML = `<b>${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</b><br>took ${days} days · ${fmtDuration(b.seconds)}`;
+    row.append(meta, nums);
+    el.appendChild(row);
+  }
+}
+function ellipsize(ctx, str, maxW) {
+  if (maxW <= 0) return '';
+  if (ctx.measureText(str).width <= maxW) return str;
+  let s = str;
+  while (s.length > 1 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+  return s.length < str.length ? s + '…' : s;
+}
+function renderGantt() {
+  const now = Date.now();
+  const windowStart = new Date(); windowStart.setMonth(windowStart.getMonth() - 12);
+  const wStart = windowStart.getTime(), wEnd = now;
+  let rows = (SUMMARY.books || []).filter(b => !b.excluded && b.first_read > 0).map(b => ({
+    b, start: b.first_read * 1000, end: (b.finished_at || b.last_open || b.first_read) * 1000,
+  })).filter(r => r.end >= wStart && r.start <= wEnd);
+  rows.sort((a, b) => a.start - b.start);
+  let capped = false;
+  if (rows.length > 20) {
+    capped = true;
+    rows = rows.slice().sort((a, b) => b.b.seconds - a.b.seconds).slice(0, 20).sort((a, b) => a.start - b.start);
+  }
+  $('#gantt-note').textContent = capped ? 'top 20 by time' : '';
+
+  const canvas = $('#chart-gantt');
+  const rowH = 24, marginT = 10, marginB = 22;
+  canvas.style.height = Math.max(rowH, rows.length * rowH + marginT + marginB) + 'px';
+  const { ctx, w, h } = prep(canvas);
+  ctx.clearRect(0, 0, w, h);
+  const muted = css('--muted'), text = css('--text'), line = css('--line');
+  if (!rows.length) {
+    ctx.fillStyle = muted; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText('No reading in the last 12 months', w / 2, h / 2);
+    return;
+  }
+  const accent = css('--accent'), accentSoft = css('--accent-soft');
+  const trackX = 4, trackW = w - 8;
+  const xOf = t => trackX + (t - wStart) / (wEnd - wStart) * trackW;
+
+  const months = [];
+  for (let d = new Date(windowStart.getFullYear(), windowStart.getMonth(), 1); d.getTime() <= wEnd; d.setMonth(d.getMonth() + 1)) {
+    months.push(new Date(d));
+  }
+  const everyN = w < 380 ? 3 : w < 600 ? 2 : 1;
+  ctx.strokeStyle = line; ctx.lineWidth = 1; ctx.font = '10px system-ui'; ctx.fillStyle = muted; ctx.textAlign = 'center';
+  months.forEach((m, i) => {
+    const x = xOf(m.getTime());
+    ctx.beginPath(); ctx.moveTo(x, marginT); ctx.lineTo(x, h - marginB); ctx.stroke();
+    if (i % everyN === 0) ctx.fillText(m.toLocaleDateString(undefined, { month: 'narrow' }), x, h - marginB + 12);
+  });
+
+  const barsInfo = [];
+  rows.forEach((r, i) => {
+    const y = marginT + i * rowH + rowH / 2 - 4;
+    const x0 = xOf(Math.max(r.start, wStart)), x1 = xOf(Math.min(r.end, wEnd));
+    const bw = Math.max(2, x1 - x0);
+    const finished = !!r.b.finished_at;
+    roundRect(ctx, x0, y, bw, 8, 4);
+    if (finished) { ctx.fillStyle = accent; ctx.fill(); }
+    else { ctx.fillStyle = accentSoft; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = accent; roundRect(ctx, x0, y, bw, 8, 4); ctx.stroke(); }
+
+    ctx.font = '11px system-ui';
+    const title = r.b.title || 'Untitled';
+    const maxLeftW = x0 - trackX - 6;
+    if (maxLeftW > 30) {
+      ctx.textAlign = 'right'; ctx.fillStyle = text;
+      ctx.fillText(ellipsize(ctx, title, maxLeftW), x0 - 5, y + 7);
+    } else {
+      ctx.textAlign = 'left'; ctx.fillStyle = muted;
+      const maxRightW = trackX + trackW - (x0 + 5);
+      ctx.fillText(ellipsize(ctx, title, Math.max(20, maxRightW)), x0 + 5, y + 7);
+    }
+    barsInfo.push({ y: marginT + i * rowH, h: rowH, r });
+  });
+  attachGanttHover(canvas, barsInfo);
+}
+function attachGanttHover(canvas, bars) {
+  const at = (cx, cy) => {
+    const rect = canvas.getBoundingClientRect();
+    const y = cy - rect.top;
+    const bar = bars.find(bar => y >= bar.y && y <= bar.y + bar.h);
+    if (!bar) { hideTip(); return; }
+    const r = bar.r;
+    const finished = !!r.b.finished_at;
+    const status = finished ? 'finished' : `${(+r.b.percent).toFixed(0)}%, in progress`;
+    const dfmt = ms => new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    showTip(`${esc(r.b.title || 'Untitled')} — ${dfmt(r.start)} → ${dfmt(r.end)} · ${fmtDuration(r.b.seconds)} · ${status}`, cx, cy);
+  };
+  canvas.onmousemove = e => at(e.clientX, e.clientY);
+  canvas.onclick = e => at(e.clientX, e.clientY);
+  canvas.onmouseleave = hideTip;
+  bindTipDismiss();
+}
 
 // ---- library grid ----
 async function ensureLibrary() { if (!LIBRARY) LIBRARY = await api('/api/library').catch(() => []); return LIBRARY; }
@@ -505,5 +799,10 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Escape') $$('.modal').forEach(closeModal);
 });
 
-window.addEventListener('resize', () => { if (SUMMARY) renderCharts(); });
+window.addEventListener('resize', () => {
+  if (!SUMMARY) return;
+  renderCharts();
+  if ($('#tab-journal').classList.contains('active')) renderJournalCharts();
+  renderOpenPanels();
+});
 loadDash();

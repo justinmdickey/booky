@@ -10,29 +10,39 @@ import (
 
 // Summary is the top-level dashboard payload.
 type Summary struct {
-	TotalSeconds   int64       `json:"total_seconds"`
-	TotalPages     int64       `json:"total_pages"`
-	BooksTracked   int         `json:"books_tracked"`
-	BooksFinished  int         `json:"books_finished"`
-	CurrentStreak  int         `json:"current_streak"`
-	LongestStreak  int         `json:"longest_streak"`
-	DaysRead       int         `json:"days_read"`
-	AvgPagesPerDay float64     `json:"avg_pages_per_day"`
-	PagesPerHour   float64     `json:"pages_per_hour"`
-	ThisWeekSecs   int64       `json:"this_week_seconds"`
-	ThisYearSecs   int64       `json:"this_year_seconds"`
-	Daily          []DayPoint  `json:"daily"`
-	Heatmap        []DayPoint  `json:"heatmap"` // last 365 days
-	Books          []BookStat  `json:"books"`
-	RecentSessions []Session   `json:"recent_sessions"`
-	Hourly         [24]int64   `json:"hourly"` // seconds read by hour-of-day
-	Weekday        [7]int64    `json:"weekday"`
+	TotalSeconds   int64        `json:"total_seconds"`
+	TotalPages     int64        `json:"total_pages"`
+	BooksTracked   int          `json:"books_tracked"`
+	BooksFinished  int          `json:"books_finished"`
+	CurrentStreak  int          `json:"current_streak"`
+	LongestStreak  int          `json:"longest_streak"`
+	DaysRead       int          `json:"days_read"`
+	AvgPagesPerDay float64      `json:"avg_pages_per_day"`
+	PagesPerHour   float64      `json:"pages_per_hour"`
+	ThisWeekSecs   int64        `json:"this_week_seconds"`
+	ThisYearSecs   int64        `json:"this_year_seconds"`
+	Daily          []DayPoint   `json:"daily"`
+	Heatmap        []DayPoint   `json:"heatmap"` // last 365 days
+	Books          []BookStat   `json:"books"`
+	RecentSessions []Session    `json:"recent_sessions"`
+	Hourly         [24]int64    `json:"hourly"` // seconds read by hour-of-day
+	Weekday        [7]int64     `json:"weekday"`
+	Punchcard      [7][24]int64 `json:"punchcard"` // seconds read by (weekday, hour), local time
+	Monthly        []MonthPoint `json:"monthly"`
 }
 
 type DayPoint struct {
 	Day     string `json:"day"` // YYYY-MM-DD
 	Seconds int64  `json:"seconds"`
 	Pages   int64  `json:"pages"`
+}
+
+// MonthPoint is one month in the continuous, zero-filled Monthly series.
+type MonthPoint struct {
+	Month         string `json:"month"` // YYYY-MM
+	Seconds       int64  `json:"seconds"`
+	Pages         int64  `json:"pages"`
+	BooksFinished int    `json:"books_finished"`
 }
 
 type BookStat struct {
@@ -50,7 +60,9 @@ type BookStat struct {
 	Highlights   int64   `json:"highlights"`
 	CalibreID    int64   `json:"calibre_id"` // filled in by web layer if library present
 	Finished     bool    `json:"finished"`
-	Excluded     bool    `json:"excluded"` // present in Books for management UI, but not counted
+	Excluded     bool    `json:"excluded"`      // present in Books for management UI, but not counted
+	FinishedAt   int64   `json:"finished_at"`   // first time the last page was reached, 0 if unfinished
+	ForecastDays float64 `json:"forecast_days"` // estimated days to finish at recent pace, 0 if n/a
 }
 
 type Session struct {
@@ -67,6 +79,17 @@ func Compute(st *store.Store, loc *time.Location) (Summary, error) {
 	var s Summary
 	if loc == nil {
 		loc = time.Local
+	}
+
+	// FinishedAt and forecast pace are each computed with one grouped query up
+	// front, then merged in below — avoids an N+1 query per book.
+	finishedAt, err := finishedAtByMD5(db)
+	if err != nil {
+		return s, err
+	}
+	pace14, err := pace14ByMD5(db, loc)
+	if err != nil {
+		return s, err
 	}
 
 	// Per-book aggregates. Excluded books ride along (the management UI needs
@@ -110,6 +133,14 @@ ORDER BY secs DESC`)
 			b.PagesPerHour = float64(b.PagesRead) * 3600.0 / float64(b.Seconds)
 		}
 		b.Finished = b.Pages > 0 && reached >= b.Pages-1 // allow off-by-one
+		if b.Finished {
+			b.FinishedAt = finishedAt[b.MD5]
+		} else if !b.Excluded && b.Pages > 0 {
+			if pace, ok := pace14[b.MD5]; ok && pace > 0 {
+				remaining := b.Pages - reached
+				b.ForecastDays = float64(remaining) / pace
+			}
+		}
 		if !b.Excluded {
 			s.TotalSeconds += b.Seconds
 			s.TotalPages += b.PagesRead
@@ -147,6 +178,83 @@ ORDER BY secs DESC`)
 	return s, nil
 }
 
+// finishedAtByMD5 returns, for every book that has ever reached its last page,
+// the earliest start_time at which it did so — i.e. the moment it was first
+// finished. One grouped query for all books, not one per book.
+func finishedAtByMD5(db *sql.DB) (map[string]int64, error) {
+	rows, err := db.Query(`
+SELECT p.md5, MIN(p.start_time)
+FROM page_stat p JOIN book b ON b.md5 = p.md5
+WHERE b.pages > 0 AND p.page >= b.pages - 1
+GROUP BY p.md5`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var md5 string
+		var t int64
+		if err := rows.Scan(&md5, &t); err != nil {
+			return nil, err
+		}
+		out[md5] = t
+	}
+	return out, rows.Err()
+}
+
+// pace14ByMD5 returns each book's recent reading pace (distinct pages read
+// per active day, over the last 14 days) for every book with any page_stat
+// activity in the last 30 days. A book present in the returned map but with
+// pace 0 was active in the 30-day window but not the 14-day one. One grouped
+// query, not one per book.
+func pace14ByMD5(db *sql.DB, loc *time.Location) (map[string]float64, error) {
+	now := time.Now().In(loc)
+	cutoff30 := now.AddDate(0, 0, -30).Unix()
+	cutoff14 := now.AddDate(0, 0, -14).Unix()
+
+	rows, err := db.Query(`SELECT md5, page, start_time FROM page_stat WHERE start_time >= ?`, cutoff30)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type paceInfo struct {
+		pages map[int64]struct{}
+		days  map[string]struct{}
+	}
+	infos := map[string]*paceInfo{}
+	for rows.Next() {
+		var md5 string
+		var page, start int64
+		if err := rows.Scan(&md5, &page, &start); err != nil {
+			return nil, err
+		}
+		info := infos[md5]
+		if info == nil {
+			info = &paceInfo{pages: map[int64]struct{}{}, days: map[string]struct{}{}}
+			infos[md5] = info
+		}
+		if start >= cutoff14 {
+			info.pages[page] = struct{}{}
+			info.days[time.Unix(start, 0).In(loc).Format("2006-01-02")] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	pace := make(map[string]float64, len(infos))
+	for md5, info := range infos {
+		if len(info.days) == 0 {
+			pace[md5] = 0
+			continue
+		}
+		pace[md5] = float64(len(info.pages)) / float64(len(info.days))
+	}
+	return pace, nil
+}
+
 func (s *Summary) computeDaily(db *sql.DB, loc *time.Location) error {
 	rows, err := db.Query(`
 SELECT page, start_time, duration FROM page_stat
@@ -161,6 +269,7 @@ WHERE md5 NOT IN (SELECT md5 FROM book WHERE excluded=1)`)
 		pages map[int64]struct{}
 	}
 	days := map[string]*agg{}
+	months := map[string]*agg{}
 	now := time.Now().In(loc)
 	weekStart := now.AddDate(0, 0, -int(now.Weekday()))
 	weekStart = time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 0, 0, 0, 0, loc)
@@ -182,6 +291,17 @@ WHERE md5 NOT IN (SELECT md5 FROM book WHERE excluded=1)`)
 		a.pages[page] = struct{}{}
 		s.Hourly[t.Hour()] += dur
 		s.Weekday[int(t.Weekday())] += dur
+		s.Punchcard[int(t.Weekday())][t.Hour()] += dur
+
+		mkey := t.Format("2006-01")
+		ma := months[mkey]
+		if ma == nil {
+			ma = &agg{pages: map[int64]struct{}{}}
+			months[mkey] = ma
+		}
+		ma.secs += dur
+		ma.pages[page] = struct{}{}
+
 		if !t.Before(weekStart) {
 			s.ThisWeekSecs += dur
 		}
@@ -214,6 +334,39 @@ WHERE md5 NOT IN (SELECT md5 FROM book WHERE excluded=1)`)
 			pt.Pages = int64(len(a.pages))
 		}
 		s.Heatmap = append(s.Heatmap, pt)
+	}
+
+	// Monthly: continuous, zero-filled series from the first month with data
+	// through the current month.
+	if len(months) > 0 {
+		monthKeys := make([]string, 0, len(months))
+		for k := range months {
+			monthKeys = append(monthKeys, k)
+		}
+		sort.Strings(monthKeys)
+		firstMonth, err := time.ParseInLocation("2006-01", monthKeys[0], loc)
+		if err != nil {
+			return err
+		}
+		curMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+
+		finishedByMonth := map[string]int{}
+		for _, b := range s.Books {
+			if b.Excluded || b.FinishedAt == 0 {
+				continue
+			}
+			finishedByMonth[time.Unix(b.FinishedAt, 0).In(loc).Format("2006-01")]++
+		}
+
+		for d := firstMonth; !d.After(curMonth); d = d.AddDate(0, 1, 0) {
+			mkey := d.Format("2006-01")
+			mp := MonthPoint{Month: mkey, BooksFinished: finishedByMonth[mkey]}
+			if ma := months[mkey]; ma != nil {
+				mp.Seconds = ma.secs
+				mp.Pages = int64(len(ma.pages))
+			}
+			s.Monthly = append(s.Monthly, mp)
+		}
 	}
 	return nil
 }
