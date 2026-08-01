@@ -126,40 +126,51 @@ function barTip() {
   if (!t) { t = document.createElement('div'); t.id = 'bar-tip'; t.className = 'bar-tip'; document.body.appendChild(t); }
   return t;
 }
-function attachBarHover(canvas, bars, labels, values, fmt) {
+function hideTip() { barTip().classList.remove('show'); }
+function showTip(html, cx, cy) {
   const tip = barTip();
-  canvas.onmousemove = e => {
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
+  tip.innerHTML = html;
+  tip.classList.add('show');
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let tx = cx + 12, ty = cy - th - 8;
+  if (tx + tw > window.innerWidth - 6) tx = cx - tw - 12;
+  if (tx < 6) tx = 6;
+  if (ty < 6) ty = cy + 12;
+  tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+}
+// Taps show the tip; anything else (tap elsewhere, scroll) dismisses it. Installed once.
+let tipDismissBound = false;
+function bindTipDismiss() {
+  if (tipDismissBound) return;
+  tipDismissBound = true;
+  document.addEventListener('click', e => { if (!e.target.closest('.cell, canvas')) hideTip(); }, true);
+  document.addEventListener('scroll', hideTip, true);
+}
+
+function attachBarHover(canvas, bars, labels, values, fmt) {
+  const at = (cx, cy) => {
+    const x = cx - canvas.getBoundingClientRect().left;
     // Hit-test the whole slot, not just the (possibly narrow) bar.
     const b = bars.find(bar => x >= bar.sx && x <= bar.sx + bar.sw);
-    if (!b) { tip.classList.remove('show'); return; }
-    tip.innerHTML = fmt ? fmt(b.i, labels[b.i], values[b.i]) : `${labels[b.i]}: ${values[b.i]}`;
-    tip.classList.add('show');
-    const tw = tip.offsetWidth, th = tip.offsetHeight;
-    let tx = e.clientX + 12, ty = e.clientY - th - 8;
-    if (tx + tw > window.innerWidth - 6) tx = e.clientX - tw - 12;
-    if (ty < 6) ty = e.clientY + 12;
-    tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+    if (!b) { hideTip(); return; }
+    showTip(fmt ? fmt(b.i, labels[b.i], values[b.i]) : `${labels[b.i]}: ${values[b.i]}`, cx, cy);
   };
-  canvas.onmouseleave = () => tip.classList.remove('show');
+  canvas.onmousemove = e => at(e.clientX, e.clientY);
+  canvas.onclick = e => at(e.clientX, e.clientY);
+  canvas.onmouseleave = hideTip;
+  bindTipDismiss();
 }
 
 function attachCellHover(el) {
-  const tip = barTip();
-  el.onmousemove = e => {
-    const c = e.target.closest('.cell');
-    if (!c || !c.dataset.day) { tip.classList.remove('show'); return; }
-    const sec = +c.dataset.sec, pages = +c.dataset.pages;
-    tip.innerHTML = `${c.dataset.day}: ${fmtDuration(sec)}, ${fmtNum(pages)} pages`;
-    tip.classList.add('show');
-    const tw = tip.offsetWidth, th = tip.offsetHeight;
-    let tx = e.clientX + 12, ty = e.clientY - th - 8;
-    if (tx + tw > window.innerWidth - 6) tx = e.clientX - tw - 12;
-    if (ty < 6) ty = e.clientY + 12;
-    tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+  const at = (target, cx, cy) => {
+    const c = target.closest && target.closest('.cell');
+    if (!c || !c.dataset.day) { hideTip(); return; }
+    showTip(`${c.dataset.day}: ${fmtDuration(+c.dataset.sec)}, ${fmtNum(+c.dataset.pages)} pages`, cx, cy);
   };
-  el.onmouseleave = () => tip.classList.remove('show');
+  el.onmousemove = e => at(e.target, e.clientX, e.clientY);
+  el.onclick = e => at(e.target, e.clientX, e.clientY);
+  el.onmouseleave = hideTip;
+  bindTipDismiss();
 }
 
 // ---- dashboard ----
@@ -245,6 +256,7 @@ function renderHeatmap() {
     el.appendChild(c);
   }
   attachCellHover(el);
+  el.scrollLeft = el.scrollWidth; // land on the most recent day, scroll back for history
   $('#heat-total').textContent = `${fmtDuration(total)} over the last year`;
 }
 function emptyCell() { const c = document.createElement('div'); c.className = 'cell'; c.style.visibility = 'hidden'; return c; }
@@ -279,7 +291,8 @@ function renderBooks() {
       <div class="sub">${esc(b.authors || '')}</div>
       <div class="progress"><i style="width:${Math.min(100, b.percent).toFixed(0)}%"></i></div>`;
     const nums = document.createElement('div'); nums.className = 'nums';
-    nums.innerHTML = `<b>${fmtDuration(b.seconds)}</b><br>${b.percent.toFixed(0)}% · ${timeAgo(b.last_open)}`;
+    nums.title = 'Total time spent in this book';
+    nums.innerHTML = `<b>${fmtDuration(b.seconds)}</b> read<br>${b.percent.toFixed(0)}% · ${timeAgo(b.last_open)}`;
     row.append(meta, nums);
     list.appendChild(row);
   }
