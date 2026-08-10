@@ -1,0 +1,124 @@
+# Build and publish booky entirely within the homelab. Nothing in this workflow
+# talks to github.com — not the registry, not the release, not the actions
+# (`uses:` resolves against code.forgejo.org by default).
+#
+# Runs on the self-hosted runner `nimbus-worker`: Proxmox VM 125, joined to the
+# Tardis k3s cluster on 2026-08-10 so CI has CPU that isn't Tardis's.
+#
+# Things that differ from the old GitHub workflow, and why:
+#
+# * Registry is Forgejo's own package registry, `forgejo.k8s.erisdor.com/justin`.
+#   Auth is the Actions-provided token, so there is no stored credential.
+# * `cache-from/to: type=gha` was a GitHub-hosted service. Replaced with a
+#   registry-backed `:buildcache` tag in the same Forgejo package repo.
+# * The image name is hardcoded rather than built from `github.repository`,
+#   because a rename of the Forgejo repo should not silently move the published
+#   image out from under the cluster's Deployment.
+# * Releases are Forgejo releases. Forgejo is not public, but it is reachable over
+#   the tailnet as well as the LAN, so the KOReader plugin zip can still be
+#   downloaded from the laptop away from home.
+# * `runs-on: ubuntu-latest` resolves to a plain `node:22-bookworm` on this
+#   runner, NOT a GitHub runner image. Nothing is preinstalled, which is why `zip`
+#   is installed explicitly and JSON is assembled with `node` (no python3, no jq).
+name: Build & publish container
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  IMAGE: forgejo.k8s.erisdor.com/justin/booky
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # No secret to manage: Forgejo hands the job a token that can write packages
+      # for this owner. The TLS cert is a real Let's Encrypt wildcard for
+      # *.k8s.erisdor.com, so no insecure-registry configuration is needed either.
+      - name: Log in to the Forgejo registry
+        uses: docker/login-action@v3
+        with:
+          registry: forgejo.k8s.erisdor.com
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+      # On a version tag, stamp the tag into the plugin's _meta.lua, then package
+      # it so the server image and its matching plugin ship together.
+      - name: Package KOReader plugin
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -eu
+          apt-get update -qq && apt-get install -y -qq zip
+          # Single source of truth: write the git tag into _meta.lua's version.
+          sed -i -E "s/(version = \")[^\"]*(\")/\1${{ github.ref_name }}\2/" \
+            plugin/booky.koplugin/_meta.lua
+          grep version plugin/booky.koplugin/_meta.lua
+          # Zip from inside plugin/ so the archive root is booky.koplugin/ —
+          # unzips straight into .adds/koreader/plugins/ with no nested dirs.
+          cd plugin && zip -r ../booky.koplugin.zip booky.koplugin
+          cat > RELEASE_NOTES.md <<'EOF'
+          Container image: `forgejo.k8s.erisdor.com/justin/booky:${{ github.ref_name }}`
+
+          **KOReader plugin:** download `booky.koplugin.zip`, unzip into
+          `.adds/koreader/plugins/` on the Kobo (the zip already contains the
+          `booky.koplugin/` folder), then restart KOReader. Keep the plugin and
+          the server image on the same version.
+          EOF
+
+      # Done against the API rather than actions/forgejo-release, so the exact
+      # request is visible here instead of hidden behind inputs that differ from
+      # the softprops action this replaced.
+      - name: Create Forgejo release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+        run: |
+          set -eu
+          json() { node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d)[process.argv[1]]??"")}catch{console.log("")}})' "$1"; }
+          body=$(node -e 'console.log(JSON.stringify(require("fs").readFileSync("RELEASE_NOTES.md","utf8")))')
+          id=$(curl -sS -H "Authorization: token $TOKEN" "$API/releases/tags/$TAG" | json id)
+          if [ -z "$id" ]; then
+            id=$(curl -sS -X POST -H "Authorization: token $TOKEN" \
+                   -H "Content-Type: application/json" \
+                   -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"body\":$body}" \
+                   "$API/releases" | json id)
+          fi
+          [ -n "$id" ] || { echo "could not create or find release $TAG"; exit 1; }
+          curl -sS --fail -X POST -H "Authorization: token $TOKEN" \
+            -F "attachment=@booky.koplugin.zip" \
+            "$API/releases/$id/assets?name=booky.koplugin.zip" >/dev/null
+          echo "forgejo release $TAG published with the plugin zip"
