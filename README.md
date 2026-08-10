@@ -46,7 +46,7 @@ flowchart LR
 # docker-compose.yml — see deploy/docker-compose.yml for the full version
 services:
   booky:
-    image: ghcr.io/justinmdickey/booky:latest   # or `build: .` to build from source
+    build: .                                   # see the note below on images
     ports: ["8222:8222"]
     environment:
       BOOKY_PUBLIC_URL: "http://your-server-ip:8222"
@@ -61,12 +61,15 @@ volumes:
 ```
 
 ```sh
-docker compose up -d           # pulls the published image; no source checkout needed
+docker compose up -d           # builds from this checkout
 # open http://your-server-ip:8222
 ```
 
-An amd64 image is published to `ghcr.io/justinmdickey/booky` by CI on every
-push to `main` and on `v*` tags.
+**On prebuilt images:** as of 2026-08-10 CI moved to a self-hosted Forgejo
+instance, and images are published to a private registry that is not reachable
+from the internet. There is no longer a public image to pull, so building from
+source (`build: .`, or `go build ./cmd/booky`) is the supported path. The
+Dockerfile is a normal two-stage Go build and needs nothing special.
 
 > Mount the Calibre library **read-only**. Booky only ever reads `metadata.db`,
 > covers, and book files — it never writes to your library.
