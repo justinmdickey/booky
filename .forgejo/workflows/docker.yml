@@ -83,8 +83,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+          # No build cache. `type=gha` was GitHub-hosted and is gone, and the
+          # obvious replacement — type=registry against a :buildcache tag — fails
+          # the whole build on a cache MISS against this registry:
+          #   ERROR: failed to configure registry cache importer:
+          #   forgejo.k8s.erisdor.com/justin/booky:buildcache: not found
+          # A missing cache is supposed to be a warning, so that is effectively a
+          # chicken-and-egg: the first build can never populate the tag it needs.
+          # The Go build is ~50s cold, so this costs little; revisit with
+          # cache-to only, or a pre-seeded tag, if it ever gets slow.
 
       # On a version tag, stamp the tag into the plugin's _meta.lua, then package
       # it so the server image and its matching plugin ship together.
