@@ -52,15 +52,22 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      # No secret to manage: Forgejo hands the job a token that can write packages
-      # for this owner. The TLS cert is a real Let's Encrypt wildcard for
-      # *.k8s.erisdor.com, so no insecure-registry configuration is needed either.
+      # REGISTRY_TOKEN is a Forgejo access token scoped to write:package.
+      #
+      # The Actions-provided `secrets.GITHUB_TOKEN` looks like it should work here
+      # and does not — the build succeeds and then the push dies with
+      # `401 Unauthorized: reqPackageAccess`. That token can read the repo and
+      # write statuses, but it carries no package scope, so a separate credential
+      # is unavoidable.
+      #
+      # The TLS cert is a real Let's Encrypt wildcard for *.k8s.erisdor.com, so no
+      # insecure-registry configuration is needed.
       - name: Log in to the Forgejo registry
         uses: docker/login-action@v3
         with:
           registry: forgejo.k8s.erisdor.com
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: justin
+          password: ${{ secrets.REGISTRY_TOKEN }}
 
       - name: Docker metadata
         id: meta
