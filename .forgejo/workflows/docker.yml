@@ -1,25 +1,25 @@
-# Forgejo Actions port of .github/workflows/docker.yml.
+# Build and publish booky entirely within the homelab. Nothing in this workflow
+# talks to github.com — not the registry, not the release, not the actions
+# (`uses:` resolves against code.forgejo.org by default).
 #
-# Runs on the self-hosted runner `nimbus-worker` (Proxmox VM 125, joined to the
-# Tardis k3s cluster purely so CI has CPU that isn't Tardis's).
+# Runs on the self-hosted runner `nimbus-worker`: Proxmox VM 125, joined to the
+# Tardis k3s cluster on 2026-08-10 so CI has CPU that isn't Tardis's.
 #
-# Deliberate decisions, because this is NOT a line-for-line copy:
+# Things that differ from the old GitHub workflow, and why:
 #
-# * The image still goes to ghcr.io. Forgejo has its own container registry, but
-#   ghcr is public and Flux's ImageRepository already watches
-#   ghcr.io/justinmdickey/booky — keeping it means zero cluster changes and the
-#   image stays publicly pullable.
-# * `github.repository` here is `justin/booky` (the Forgejo owner), not
-#   `justinmdickey/booky`, so the image name is hardcoded rather than derived.
-# * `cache-from/to: type=gha` is a GitHub-hosted service and does not exist here.
-#   Replaced with a registry-backed cache tag in the same ghcr repo.
-# * Releases are published to BOTH Forgejo and GitHub on a version tag. Forgejo
-#   is LAN-only and requires sign-in, so a Forgejo-only release would mean the
-#   KOReader plugin zip could not be downloaded away from home — and grabbing
-#   that zip is the whole point of the release.
-# * `runs-on: ubuntu-latest` resolves to a plain Node image on this runner, not a
-#   GitHub runner image. Nothing is preinstalled beyond node/git, which is why
-#   `zip` gets installed explicitly below.
+# * Registry is Forgejo's own package registry, `forgejo.k8s.erisdor.com/justin`.
+#   Auth is the Actions-provided token, so there is no stored credential.
+# * `cache-from/to: type=gha` was a GitHub-hosted service. Replaced with a
+#   registry-backed `:buildcache` tag in the same Forgejo package repo.
+# * The image name is hardcoded rather than built from `github.repository`,
+#   because a rename of the Forgejo repo should not silently move the published
+#   image out from under the cluster's Deployment.
+# * Releases are Forgejo releases. Forgejo is not public, but it is reachable over
+#   the tailnet as well as the LAN, so the KOReader plugin zip can still be
+#   downloaded from the laptop away from home.
+# * `runs-on: ubuntu-latest` resolves to a plain `node:22-bookworm` on this
+#   runner, NOT a GitHub runner image. Nothing is preinstalled, which is why `zip`
+#   is installed explicitly and JSON is assembled with `node` (no python3, no jq).
 name: Build & publish container
 
 on:
@@ -29,7 +29,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: ghcr.io/justinmdickey/booky
+  IMAGE: forgejo.k8s.erisdor.com/justin/booky
 
 jobs:
   build:
@@ -40,16 +40,15 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      # GHCR_TOKEN is a GitHub PAT stored as a Forgejo Actions secret. On GitHub
-      # this step used the automatic `secrets.GITHUB_TOKEN`, which has no
-      # equivalent here — Forgejo's own token cannot authenticate to ghcr.
-      # Needs: write:packages, plus contents:write for the GitHub release step.
-      - name: Log in to GHCR
+      # No secret to manage: Forgejo hands the job a token that can write packages
+      # for this owner. The TLS cert is a real Let's Encrypt wildcard for
+      # *.k8s.erisdor.com, so no insecure-registry configuration is needed either.
+      - name: Log in to the Forgejo registry
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: justinmdickey
-          password: ${{ secrets.GHCR_TOKEN }}
+          registry: forgejo.k8s.erisdor.com
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker metadata
         id: meta
@@ -81,7 +80,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -eu
-          # `zip` is not present in the runner's job image — see the header note.
           apt-get update -qq && apt-get install -y -qq zip
           # Single source of truth: write the git tag into _meta.lua's version.
           sed -i -E "s/(version = \")[^\"]*(\")/\1${{ github.ref_name }}\2/" \
@@ -90,17 +88,8 @@ jobs:
           # Zip from inside plugin/ so the archive root is booky.koplugin/ —
           # unzips straight into .adds/koreader/plugins/ with no nested dirs.
           cd plugin && zip -r ../booky.koplugin.zip booky.koplugin
-
-      # `dist/` holds exactly the release assets. The Forgejo release API (and
-      # the release action) will happily upload whatever it is pointed at, so the
-      # zip is isolated rather than left in the checkout root.
-      - name: Stage release assets and notes
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          set -eu
-          mkdir -p dist && mv booky.koplugin.zip dist/
           cat > RELEASE_NOTES.md <<'EOF'
-          Container image: `ghcr.io/justinmdickey/booky:${{ github.ref_name }}`
+          Container image: `forgejo.k8s.erisdor.com/justin/booky:${{ github.ref_name }}`
 
           **KOReader plugin:** download `booky.koplugin.zip`, unzip into
           `.adds/koreader/plugins/` on the Kobo (the zip already contains the
@@ -108,56 +97,28 @@ jobs:
           the server image on the same version.
           EOF
 
-      # Both release steps use the API rather than an action: forgejo-release's
-      # inputs differ enough from softprops/action-gh-release that guessing them
-      # is how you find out at tag time, and JSON is built with `node` because the
-      # job image is node:22-bookworm — it has no python3 and no jq.
+      # Done against the API rather than actions/forgejo-release, so the exact
+      # request is visible here instead of hidden behind inputs that differ from
+      # the softprops action this replaced.
       - name: Create Forgejo release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
-          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
         run: |
           set -eu
+          json() { node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d)[process.argv[1]]??"")}catch{console.log("")}})' "$1"; }
           body=$(node -e 'console.log(JSON.stringify(require("fs").readFileSync("RELEASE_NOTES.md","utf8")))')
-          id=$(curl -sS -H "Authorization: token $FORGEJO_TOKEN" "$API/releases/tags/$TAG" \
-                 | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).id||"")}catch{console.log("")}})')
+          id=$(curl -sS -H "Authorization: token $TOKEN" "$API/releases/tags/$TAG" | json id)
           if [ -z "$id" ]; then
-            id=$(curl -sS -X POST -H "Authorization: token $FORGEJO_TOKEN" \
+            id=$(curl -sS -X POST -H "Authorization: token $TOKEN" \
                    -H "Content-Type: application/json" \
                    -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"body\":$body}" \
-                   "$API/releases" \
-                   | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).id))')
+                   "$API/releases" | json id)
           fi
-          curl -sS -X POST -H "Authorization: token $FORGEJO_TOKEN" \
-            -F "attachment=@dist/booky.koplugin.zip" \
+          [ -n "$id" ] || { echo "could not create or find release $TAG"; exit 1; }
+          curl -sS --fail -X POST -H "Authorization: token $TOKEN" \
+            -F "attachment=@booky.koplugin.zip" \
             "$API/releases/$id/assets?name=booky.koplugin.zip" >/dev/null
-          echo "forgejo release $TAG ready"
-
-      # Mirrored to GitHub too, so the plugin stays downloadable from outside the
-      # house — Forgejo is LAN-only and requires sign-in.
-      - name: Mirror release to GitHub
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          TAG: ${{ github.ref_name }}
-          REPO: justinmdickey/booky
-        run: |
-          set -eu
-          auth="Authorization: Bearer $GH_TOKEN"
-          body=$(node -e 'console.log(JSON.stringify(require("fs").readFileSync("RELEASE_NOTES.md","utf8")))')
-          id=$(curl -sS -H "$auth" -H "Accept: application/vnd.github+json" \
-                 "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
-                 | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).id||"")}catch{console.log("")}})')
-          if [ -z "$id" ]; then
-            id=$(curl -sS -X POST -H "$auth" -H "Accept: application/vnd.github+json" \
-                   -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"body\":$body}" \
-                   "https://api.github.com/repos/$REPO/releases" \
-                   | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).id))')
-          fi
-          curl -sS -X POST -H "$auth" -H "Content-Type: application/zip" \
-            --data-binary @dist/booky.koplugin.zip \
-            "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=booky.koplugin.zip" \
-            >/dev/null
-          echo "uploaded booky.koplugin.zip to GitHub release $TAG"
+          echo "forgejo release $TAG published with the plugin zip"
