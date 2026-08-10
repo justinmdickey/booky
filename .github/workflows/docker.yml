@@ -1,9 +1,14 @@
 name: Build & publish container
 
+# STANDBY as of 2026-08-10. Forgejo owns this pipeline now — see
+# .forgejo/workflows/docker.yml, which runs on the self-hosted nimbus-worker
+# runner and pushes to the same ghcr.io/justinmdickey/booky.
+#
+# The push/tag triggers are removed rather than the file deleted, so this stays a
+# working fallback: re-add them and GitHub takes the build back with no other
+# changes. Leaving both sets of triggers live would have two runners racing to
+# push identical tags to the same registry.
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
 env:
