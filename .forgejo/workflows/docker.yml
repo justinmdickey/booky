@@ -37,6 +37,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The job image is node:22-bookworm and has no docker client, so every
+      # docker/* action fails with "Unable to locate executable file: docker"
+      # despite the daemon socket being mounted in. Only the client binary is
+      # taken from the static release — buildx is fetched by setup-buildx-action
+      # itself, and dockerd already lives in the runner pod's sidecar.
+      - name: Install the docker CLI
+        run: |
+          set -eu
+          curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-29.7.1.tgz \
+            | tar xz -C /usr/local/bin --strip-components=1 docker/docker
+          docker version --format '{{.Client.Version}}'
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
