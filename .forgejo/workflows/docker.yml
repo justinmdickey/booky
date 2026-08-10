@@ -111,9 +111,9 @@ jobs:
           sed -i -E "s/(version = \")[^\"]*(\")/\1${{ github.ref_name }}\2/" \
             plugin/booky.koplugin/_meta.lua
           grep version plugin/booky.koplugin/_meta.lua
-          # Zip from inside plugin/ so the archive root is booky.koplugin/ —
-          # unzips straight into .adds/koreader/plugins/ with no nested dirs.
-          cd plugin && zip -r ../booky.koplugin.zip booky.koplugin
+          # Written BEFORE the cd: the zip has to be created from inside plugin/,
+          # and a heredoc after that lands the notes in plugin/ where the next
+          # step cannot find them (ENOENT: RELEASE_NOTES.md).
           cat > RELEASE_NOTES.md <<'EOF'
           Container image: `forgejo.k8s.erisdor.com/justin/booky:${{ github.ref_name }}`
 
@@ -122,6 +122,9 @@ jobs:
           `booky.koplugin/` folder), then restart KOReader. Keep the plugin and
           the server image on the same version.
           EOF
+          # Zip from inside plugin/ so the archive root is booky.koplugin/ —
+          # unzips straight into .adds/koreader/plugins/ with no nested dirs.
+          cd plugin && zip -r ../booky.koplugin.zip booky.koplugin
 
       # Done against the API rather than actions/forgejo-release, so the exact
       # request is visible here instead of hidden behind inputs that differ from
