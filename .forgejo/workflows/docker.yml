@@ -7,7 +7,7 @@
 #
 # Things that differ from the old GitHub workflow, and why:
 #
-# * Registry is Forgejo's own package registry, `forgejo.k8s.erisdor.com/justin`.
+# * Registry is Forgejo's own package registry, `git.erisdor.com/justin`.
 #   Auth is the Actions-provided token, so there is no stored credential.
 # * `cache-from/to: type=gha` was a GitHub-hosted service. Replaced with a
 #   registry-backed `:buildcache` tag in the same Forgejo package repo.
@@ -29,7 +29,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: forgejo.k8s.erisdor.com/justin/booky
+  IMAGE: git.erisdor.com/justin/booky
 
 jobs:
   build:
@@ -65,7 +65,7 @@ jobs:
       - name: Log in to the Forgejo registry
         uses: docker/login-action@v3
         with:
-          registry: forgejo.k8s.erisdor.com
+          registry: git.erisdor.com
           username: justin
           password: ${{ secrets.REGISTRY_TOKEN }}
 
@@ -94,7 +94,7 @@ jobs:
           # obvious replacement — type=registry against a :buildcache tag — fails
           # the whole build on a cache MISS against this registry:
           #   ERROR: failed to configure registry cache importer:
-          #   forgejo.k8s.erisdor.com/justin/booky:buildcache: not found
+          #   git.erisdor.com/justin/booky:buildcache: not found
           # A missing cache is supposed to be a warning, so that is effectively a
           # chicken-and-egg: the first build can never populate the tag it needs.
           # The Go build is ~50s cold, so this costs little; revisit with
@@ -115,7 +115,7 @@ jobs:
           # and a heredoc after that lands the notes in plugin/ where the next
           # step cannot find them (ENOENT: RELEASE_NOTES.md).
           cat > RELEASE_NOTES.md <<'EOF'
-          Container image: `forgejo.k8s.erisdor.com/justin/booky:${{ github.ref_name }}`
+          Container image: `git.erisdor.com/justin/booky:${{ github.ref_name }}`
 
           **KOReader plugin:** download `booky.koplugin.zip`, unzip into
           `.adds/koreader/plugins/` on the Kobo (the zip already contains the
