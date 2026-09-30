@@ -63,6 +63,12 @@ type BookStat struct {
 	Excluded     bool    `json:"excluded"`      // present in Books for management UI, but not counted
 	FinishedAt   int64   `json:"finished_at"`   // first time the last page was reached, 0 if unfinished
 	ForecastSecs int64   `json:"forecast_seconds"` // estimated reading time to finish at this book's pace, 0 if n/a
+	// Device is where the reading happened: "kobo", "x4", or "kobo+x4".
+	Device string `json:"device"`
+	// LastOpenSource says what LastOpen is for X4 books, which have no read
+	// timestamps: "sync" (the X4's last kosync push) or "upload" (when the
+	// card was last uploaded). Empty for Kobo books.
+	LastOpenSource string `json:"last_open_source,omitempty"`
 }
 
 type Session struct {
@@ -108,7 +114,7 @@ ORDER BY secs DESC`)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var b BookStat
+		b := BookStat{Device: "kobo"}
 		var maxPage, lastRead, position int64
 		if err := rows.Scan(&b.MD5, &b.Title, &b.Authors, &b.Series, &b.Pages,
 			&b.Highlights, &b.LastOpen, &b.Excluded, &b.Seconds, &b.PagesRead, &maxPage, &b.FirstRead, &lastRead, &position); err != nil {
@@ -157,6 +163,12 @@ ORDER BY secs DESC`)
 		return s, err
 	}
 
+	// Pages with a date attached, for per-day averages. X4 pages have none.
+	datedPages := s.TotalPages
+	if err := s.mergeX4(st, loc); err != nil {
+		return s, err
+	}
+
 	if s.TotalSeconds > 0 {
 		s.PagesPerHour = float64(s.TotalPages) * 3600.0 / float64(s.TotalSeconds)
 	}
@@ -175,7 +187,7 @@ ORDER BY secs DESC`)
 	}
 
 	if s.DaysRead > 0 {
-		s.AvgPagesPerDay = float64(s.TotalPages) / float64(s.DaysRead)
+		s.AvgPagesPerDay = float64(datedPages) / float64(s.DaysRead)
 	}
 	return s, nil
 }
