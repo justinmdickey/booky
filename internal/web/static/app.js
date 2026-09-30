@@ -193,6 +193,9 @@ async function loadDash() {
   $('#dash-content').classList.remove('hidden');
 
   $('#s-time').textContent = fmtDuration(SUMMARY.total_seconds);
+  // X4 time has no dates, so it's in the totals but not the charts below.
+  const x4 = (SUMMARY.books || []).some(b => !b.excluded && (b.device || '').includes('x4'));
+  $('#x4-note').classList.toggle('hidden', !x4);
   $('#s-streak').textContent = SUMMARY.current_streak;
   $('#s-books').textContent = `${SUMMARY.books_tracked} · ${SUMMARY.books_finished}`;
   $('#s-pages').textContent = fmtNum(SUMMARY.total_pages);
@@ -306,7 +309,8 @@ function renderBooks() {
     row.appendChild(coverEl(b, 'cover'));
     const meta = document.createElement('div'); meta.className = 'meta';
     const fin = b.finished ? ' <span class="badge">DONE</span>' : '';
-    meta.innerHTML = `<div class="title">${esc(b.title || 'Untitled')}${fin}</div>
+    const dev = b.device && b.device !== 'kobo' ? ` <span class="badge device">${esc(b.device.toUpperCase())}</span>` : '';
+    meta.innerHTML = `<div class="title">${esc(b.title || 'Untitled')}${fin}${dev}</div>
       <div class="sub">${esc(b.authors || '')}</div>
       <div class="progress"><i style="width:${Math.min(100, b.percent).toFixed(0)}%"></i></div>`;
     const nums = document.createElement('div'); nums.className = 'nums';
@@ -315,13 +319,21 @@ function renderBooks() {
     if (b.forecast_seconds > 0 && !b.finished) {
       forecast = ` · <span title="Estimated reading time to finish, at your pace in this book">~${fmtDuration(b.forecast_seconds)} left</span>`;
     }
-    nums.innerHTML = `<b>${fmtDuration(b.seconds)}</b> read<br>${b.percent.toFixed(0)}% · ${timeAgo(b.last_open)}${forecast}`;
+    nums.innerHTML = `<b>${fmtDuration(b.seconds)}</b> read<br>${b.percent.toFixed(0)}% · ${lastSeen(b)}${forecast}`;
     const caret = document.createElement('span'); caret.className = 'caret'; caret.textContent = '▸';
     row.append(meta, nums, caret);
     const panel = document.createElement('div'); panel.className = 'progress-panel hidden';
     row.onclick = () => toggleProgressPanel(b, row, panel);
     list.append(row, panel);
   }
+}
+
+// X4 books have no read timestamps: say what the time actually is.
+function lastSeen(b) {
+  const ago = timeAgo(b.last_open);
+  if (b.last_open_source === 'sync') return `synced ${ago}`;
+  if (b.last_open_source === 'upload') return `<span title="The X4 doesn't record when you read; this is when its card was last uploaded">uploaded ${ago}</span>`;
+  return ago;
 }
 
 // ---- book progress expand ----

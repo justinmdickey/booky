@@ -141,6 +141,9 @@ canvas { width: 100%; display: block; height: 140px; }
 .badge { display: inline-block; font-size: .68rem; background: var(--accent-soft); color: var(--accent);
   padding: .1rem .4rem; border-radius: 6px; font-weight: 700; vertical-align: middle; }
 
+.badge.device { background: var(--surface-2); color: var(--muted); }
+.x4-note { color: var(--muted); font-size: .8rem; margin: -.4rem 0 1rem; }
+
 .book-row.expandable { cursor: pointer; border-radius: 10px; padding: .3rem; margin: -.3rem; }
 .book-row.expandable:hover { background: var(--surface-2); }
 .book-row .caret { flex: none; color: var(--muted); font-size: .72rem; margin-left: .2rem; transition: transform .15s; }
