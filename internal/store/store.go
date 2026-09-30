@@ -91,6 +91,28 @@ CREATE TABLE IF NOT EXISTS page_stat (
 );
 CREATE INDEX IF NOT EXISTS page_stat_start ON page_stat(start_time);
 
+-- Per-book totals from an Xteink X4 running CrossInk, which keeps running
+-- totals instead of a statistics.sqlite3. Kept apart from book/page_stat on
+-- purpose: KOReader ingest prunes those to the Kobo's own history, and X4 rows
+-- must survive that. Uploads only ever upsert here, never delete.
+CREATE TABLE IF NOT EXISTS x4_book (
+    md5            TEXT PRIMARY KEY,    -- partial-MD5, same as the X4's kosync document id
+    title          TEXT,
+    authors        TEXT,
+    series         TEXT,
+    card_path      TEXT,                -- e.g. /Books/Fiction/Dune.epub
+    sessions       INTEGER NOT NULL DEFAULT 0,
+    seconds        INTEGER NOT NULL DEFAULT 0,
+    pages_turned   INTEGER NOT NULL DEFAULT 0,
+    completed      INTEGER NOT NULL DEFAULT 0,
+    percent        REAL,                -- 0-100, NULL if the device had none
+    start_date     TEXT,                -- YYYY-MM-DD, NULL until the X4 clock is set
+    finished_date  TEXT,
+    est_left_secs  INTEGER NOT NULL DEFAULT 0,
+    uploaded_at    INTEGER NOT NULL,
+    excluded       INTEGER NOT NULL DEFAULT 0
+);
+
 -- User-curated collections for the OPDS feed ("Want to read", "On deck", ...).
 CREATE TABLE IF NOT EXISTS collection (
     id    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,14 +158,21 @@ CREATE INDEX IF NOT EXISTS web_session_exp ON web_session(expires_at);
 }
 
 // SetBookExcluded flips whether a book counts toward reading stats. Reports
-// whether a row with that md5 existed.
+// whether a row with that md5 existed. X4 books share the flag.
 func (s *Store) SetBookExcluded(md5 string, excluded bool) (bool, error) {
-	res, err := s.db.Exec(`UPDATE book SET excluded=? WHERE md5=?`, excluded, md5)
-	if err != nil {
-		return false, err
+	var total int64
+	for _, table := range []string{"book", "x4_book"} {
+		res, err := s.db.Exec(`UPDATE `+table+` SET excluded=? WHERE md5=?`, excluded, md5)
+		if err != nil {
+			return false, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		total += n
 	}
-	n, err := res.RowsAffected()
-	return n > 0, err
+	return total > 0, nil
 }
 
 // SetBooksExcluded bulk-applies the excluded flag to every book whose md5 is
