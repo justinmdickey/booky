@@ -164,6 +164,25 @@ library. Then on the Kobo: KOReader → **OPDS catalog → + (add)**:
 
 Browse *On Deck → your collection* and download straight to the device.
 
+## Connect an Xteink X4 (CrossInk)
+
+The X4 speaks kosync, so point its **KOReader Sync** settings at Booky the same
+way as the Kobo. It has no `statistics.sqlite3`, though: CrossInk keeps running
+per-book totals on the SD card. Upload those with `booky-x4` while the card is
+mounted on your computer:
+
+```sh
+go build -o booky-x4 ./cmd/booky-x4
+BOOKY_URL=http://your-server-ip:8222 BOOKY_USER=reader BOOKY_PASS=change-me \
+  ./booky-x4 /run/media/$USER/XTEINK        # add -dry-run to just print
+```
+
+X4 books get an **X4** badge and count toward total time, pages and books
+finished. CrossInk records no timestamps, so X4 time stays out of the heatmap,
+streaks and time-of-day charts. A book counts as finished when it was marked
+finished on the device or reached 99.5%. Uploads only add or update rows in
+their own table; the Kobo's stats upload can't remove them.
+
 ## How the join works
 
 KOReader fingerprints each book with a *partial MD5* — twelve 1 KiB samples at
@@ -183,6 +202,7 @@ So Booky ties all three together without any shared database id. (Implemented in
 | --- | --- |
 | `POST /users/create`, `GET /users/auth`, `PUT /syncs/progress`, `GET /syncs/progress/{doc}` | kosync protocol (KOReader-compatible) |
 | `POST /api/stats/upload` | Upload `statistics.sqlite3` (raw body or multipart `file`) |
+| `POST /api/x4/upload` | Upload X4 per-book totals as JSON (sent by `booky-x4`) |
 | `GET /api/sync/manifest` | Full library list (download URLs + filenames) for bulk book sync |
 | `GET /api/summary` | Dashboard JSON |
 | `GET /api/library`, `GET /api/collections`, `POST/DELETE /api/collections...` | Curation |
