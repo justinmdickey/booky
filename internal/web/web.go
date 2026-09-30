@@ -82,6 +82,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// the raw statistics.sqlite3 here.
 	mux.HandleFunc("POST /api/stats/upload", s.auth.RequireJSON(s.apiUpload))
 
+	// X4 upload: the booky-x4 tool POSTs per-book totals read off an Xteink
+	// X4's SD card (CrossInk has no statistics.sqlite3 to send).
+	mux.HandleFunc("POST /api/x4/upload", s.auth.RequireJSON(s.apiX4Upload))
+
 	// Cover proxy for the dashboard (reuses OPDS cover path under the hood).
 	mux.HandleFunc("GET /cover/{id}", s.auth.RequireJSON(s.cover))
 }
@@ -457,6 +461,42 @@ func (s *Server) apiUpload(w http.ResponseWriter, r *http.Request) {
 		"ok": true, "books": books, "page_stats": pages,
 		"ingested_at": time.Now().Unix(),
 	})
+}
+
+// apiX4Upload stores per-book totals from an X4. It only adds or updates
+// rows, so it can't disturb the Kobo's history or drop earlier X4 books.
+func (s *Server) apiX4Upload(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Books []store.X4Book `json:"books"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	for _, b := range req.Books {
+		if !isMD5Hex(b.MD5) {
+			http.Error(w, "invalid md5: "+b.MD5, http.StatusBadRequest)
+			return
+		}
+	}
+	n, err := s.st.UpsertX4Books(req.Books)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "books": n, "uploaded_at": time.Now().Unix()})
+}
+
+func isMD5Hex(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) cover(w http.ResponseWriter, r *http.Request) {
